@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sprite Video Lab</title>
+  <link rel="stylesheet" href="/app/styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Sprite Video Lab</p>
+        <h1>&#x89C6;&#x9891;&#x8F6C; Sprite &#x5E27;&#x5DE5;&#x5177;</h1>
+        <p class="hero-copy">&#x5BFC;&#x5165;&#x672C;&#x5730;&#x89C6;&#x9891;&#xFF0C;&#x622A;&#x53D6;&#x7247;&#x6BB5;&#xFF0C;&#x62BD;&#x5E27;&#xFF0C;&#x62A0;&#x7EFF;&#x5E55;&#xFF0C;&#x7EDF;&#x4E00;&#x7F29;&#x653E;&#xFF0C;&#x518D;&#x5BFC;&#x51FA;&#x6210;&#x4E00;&#x7EC4;&#x900F;&#x660E; PNG&#x3002;</p>
+      </div>
+      <div class="hero-status">
+        <span class="status-chip">&#x672C;&#x5730;&#x8FD0;&#x884C;</span>
+        <p class="hero-note">&#x9002;&#x5408;&#x628A; AI &#x89D2;&#x8272;&#x7EFF;&#x5E55;&#x89C6;&#x9891;&#x62C6;&#x6210;&#x7A33;&#x5B9A;&#x7684;&#x7CBE;&#x7075;&#x5E27;&#xFF0C;&#x518D;&#x9001;&#x53BB;&#x540E;&#x7EED;&#x50CF;&#x7D20;&#x4FEE;&#x6B63;&#x3002;</p>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel panel-wide">
+        <div class="panel-head">
+          <div>
+            <h2>1. &#x5BFC;&#x5165;&#x89C6;&#x9891;</h2>
+            <p>&#x652F;&#x6301;&#x7EDD;&#x5BF9;&#x8DEF;&#x5F84;&#x5BFC;&#x5165;&#xFF0C;&#x6216;&#x8005;&#x76F4;&#x63A5;&#x4E0A;&#x4F20;&#x89C6;&#x9891;&#x6587;&#x4EF6;&#x3002;</p>
+          </div>
+        </div>
+
+        <div class="import-stack">
+          <div class="inline-form">
+            <label class="field grow">
+              <span>&#x672C;&#x5730;&#x89C6;&#x9891;/&#x56FE;&#x7247;&#x8DEF;&#x5F84;</span>
+              <input id="pathInput" type="text" placeholder="&#x4F8B;&#x5982;&#xFF1A;D:\media\hero.mp4 &#x6216; hero.png">
+            </label>
+            <button id="importPathButton" class="primary-button" type="button">&#x5BFC;&#x5165;&#x8DEF;&#x5F84;</button>
+          </div>
+
+          <div class="upload-form">
+            <label
+              id="uploadDropzone"
+              class="upload-dropzone"
+              for="uploadInput"
+              tabindex="0"
+              role="button"
+              aria-controls="uploadInput"
+              aria-busy="false"
+            >
+              <span class="upload-dropzone-title">&#x62D6;&#x52A8;&#x89C6;&#x9891;&#x6216;&#x5355;&#x5F20;&#x56FE;&#x7247;&#x5230;&#x8FD9;&#x91CC;</span>
+              <span class="upload-dropzone-hint">&#x6216;&#x70B9;&#x51FB;&#x9009;&#x62E9;&#x6587;&#x4EF6;&#x540E;&#x7ACB;&#x5373;&#x8F7D;&#x5165;</span>
+              <span class="upload-dropzone-types">.mp4 / .mov / .mkv / .webm / .png / .jpg / .jpeg / .webp / .bmp</span>
+            </label>
+            <input id="uploadInput" type="file" accept=".mp4,.mov,.mkv,.webm,.png,.jpg,.jpeg,.webp,.bmp,video/*,image/*">
+            <p class="subtle">&#x5982;&#x679C;&#x6587;&#x4EF6;&#x5DF2;&#x7ECF;&#x5728;&#x672C;&#x673A;&#x78C1;&#x76D8;&#x4E0A;&#xFF0C;&#x4F18;&#x5148;&#x7528;&#x201C;&#x5BFC;&#x5165;&#x8DEF;&#x5F84;&#x201D;&#x3002;</p>
+          </div>
+        </div>
+
+        <div class="meta-grid empty-meta">
+          <div class="meta-card">
+            <span class="meta-label">&#x5F53;&#x524D;&#x89C6;&#x9891;</span>
+            <strong id="videoName">&#x672A;&#x5BFC;&#x5165;</strong>
+          </div>
+          <div class="meta-card">
+            <span class="meta-label">&#x5206;&#x8FA8;&#x7387;</span>
+            <strong id="videoSize">-</strong>
+          </div>
+          <div class="meta-card">
+            <span class="meta-label">&#x5E27;&#x7387;</span>
+            <strong id="videoFps">-</strong>
+          </div>
+          <div class="meta-card">
+            <span class="meta-label">&#x65F6;&#x957F;</span>
+            <strong id="videoDuration">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-wide" id="previewPanel" hidden>
+        <div class="panel-head">
+          <div>
+            <h2>2. &#x9884;&#x89C8;&#x4E0E;&#x622A;&#x53D6;&#x533A;&#x95F4;</h2>
+            <p>&#x89C6;&#x9891;&#x53EF;&#x5728;&#x8FD9;&#x91CC;&#x786E;&#x5B9A;&#x622A;&#x53D6;&#x533A;&#x95F4;&#xFF0C;&#x5355;&#x5F20;&#x56FE;&#x7247;&#x4F1A;&#x81EA;&#x52A8;&#x8FDB;&#x5165;&#x5355;&#x5E27;&#x6A21;&#x5F0F;&#x3002;</p>
+          </div>
+        </div>
+
+        <div class="preview-grid">
+          <div class="video-wrap">
+            <video id="videoPreview" controls playsinline></video>
+            <img id="mediaPreviewImage" alt="source image preview" hidden>
+            <div id="videoToolbar" class="video-toolbar">
+              <label class="checkbox-row compact">
+                <input id="loopSegmentToggle" type="checkbox" checked>
+                <span>&#x53EA;&#x5FAA;&#x73AF;&#x5DF2;&#x786E;&#x8BA4;&#x533A;&#x95F4;</span>
+              </label>
+              <span id="currentTimeLabel" class="time-chip">&#x5F53;&#x524D; 0.00s</span>
+            </div>
+          </div>
+
+          <div class="segment-panel">
+            <label class="field">
+              <span>&#x8D77;&#x70B9;&#x65F6;&#x95F4;&#xFF08;&#x79D2;&#xFF09;</span>
+              <div class="time-control">
+                <input id="startRange" type="range" min="0" max="1" step="0.01" value="0">
+                <input id="startInput" type="number" min="0" step="0.01" value="0">
+              </div>
+            </label>
+
+            <label class="field">
+              <span>&#x7EC8;&#x70B9;&#x65F6;&#x95F4;&#xFF08;&#x79D2;&#xFF09;</span>
+              <div class="time-control">
+                <input id="endRange" type="range" min="0" max="1" step="0.01" value="1">
+                <input id="endInput" type="number" min="0" step="0.01" value="1">
+              </div>
+            </label>
+
+            <div class="segment-summary">
+              <span>&#x9009;&#x4E2D;&#x65F6;&#x957F;</span>
+              <strong id="segmentLength">0.00s</strong>
+            </div>
+
+            <div class="segment-confirm-bar">
+              <div class="segment-confirm-meta">
+                <span id="segmentConfirmStatus" class="segment-status pending">&#x8FD8;&#x672A;&#x786E;&#x5B9A;&#x9009;&#x533A;</span>
+                <small id="segmentConfirmHint">&#x8C03;&#x597D;&#x8D77;&#x70B9;&#x548C;&#x7EC8;&#x70B9;&#x540E;&#xFF0C;&#x70B9;&#x4E00;&#x6B21;&#x786E;&#x5B9A;&#x9009;&#x533A;&#x3002;</small>
+              </div>
+              <button id="confirmSegmentButton" type="button" class="primary-button">&#x786E;&#x5B9A;&#x9009;&#x533A;</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-wide" id="processPanel" hidden>
+        <div class="panel-head">
+          <div>
+            <h2>3. &#x62BD;&#x5E27;&#x4E0E;&#x62A0;&#x7EFF;&#x5E55;</h2>
+            <p>&#x8FD9;&#x91CC;&#x7684;&#x53C2;&#x6570;&#x4F1A;&#x51B3;&#x5B9A;&#x62BD;&#x5E27;&#x5BC6;&#x5EA6;&#x3001;&#x900F;&#x660E;&#x8FB9;&#x7F18;&#x3001;&#x7F29;&#x653E;&#x548C;&#x89D2;&#x8272;&#x843D;&#x5730;&#x4F4D;&#x7F6E;&#x3002;</p>
+          </div>
+          <div class="step-lock-note" id="processLockNote">&#x5148;&#x56DE;&#x5230;&#x7B2C; 2 &#x6B65;&#x786E;&#x5B9A;&#x9009;&#x533A;&#xFF0C;&#x518D;&#x8FDB;&#x884C;&#x5355;&#x5E27;&#x9884;&#x89C8;&#x548C;&#x6574;&#x6BB5;&#x5904;&#x7406;&#x3002;</div>
+        </div>
+
+        <div class="process-step-shell" id="processStepShell">
+        <div class="form-grid">
+          <label class="field">
+            <span>&#x4FDD;&#x7559;&#x6BCF; N &#x5E27;</span>
+            <input id="keepEveryInput" type="number" min="1" step="1" value="2">
+            <small>1 = &#x5168;&#x4FDD;&#x7559;&#xFF0C;2 = &#x9694;&#x4E00;&#x5E27;&#xFF0C;3 = &#x6BCF;&#x4E09;&#x5E27;&#x4FDD;&#x7559;&#x4E00;&#x5F20;&#x3002;</small>
+          </label>
+
+          <label class="field">
+            <span>&#x76EE;&#x6807;&#x753B;&#x5E03;&#x5C3A;&#x5BF8;</span>
+            <input id="targetSizeInput" type="number" min="32" step="1" value="128">
+            <small>&#x8F93;&#x51FA;&#x6BCF;&#x4E00;&#x5E27;&#x90FD;&#x4F1A;&#x653E;&#x8FDB;&#x8FD9;&#x4E2A;&#x6B63;&#x65B9;&#x5F62;&#x753B;&#x5E03;&#x91CC;&#x3002;</small>
+          </label>
+
+          <label class="field">
+            <span>&#x5E95;&#x90E8;&#x6536;&#x7F29;&#x8FB9;&#x8DDD;</span>
+            <input id="reducePxInput" type="number" min="0" step="1" value="12">
+            <small>&#x6570;&#x503C;&#x8D8A;&#x5927;&#xFF0C;&#x89D2;&#x8272;&#x6574;&#x4F53;&#x8D8A;&#x7F29;&#x8FDB;&#x53BB;&#x3002;</small>
+          </label>
+
+          <label class="field">
+            <span>&#x542F;&#x7528;&#x62A0;&#x80CC;&#x666F;</span>
+            <label class="checkbox-row">
+              <input id="chromaEnabledInput" type="checkbox" checked>
+              <span>&#x6309;&#x989C;&#x8272;&#x5220;&#x9664;&#x80CC;&#x666F;&#x5E76;&#x8F93;&#x51FA;&#x900F;&#x660E; PNG</span>
+            </label>
+          </label>
+
+          <label class="field">
+            <span>&#x62A0;&#x56FE;&#x53D6;&#x8272;&#x65B9;&#x5F0F;</span>
+            <select id="keyModeInput">
+              <option value="auto">&#x81EA;&#x52A8;&#x8BC6;&#x522B;&#x56DB;&#x89D2;&#x5E73;&#x5747;&#x8272;</option>
+              <option value="manual">&#x624B;&#x52A8;&#x6307;&#x5B9A;&#x989C;&#x8272;</option>
+            </select>
+          </label>
+
+          <label class="field" id="manualColorField">
+            <span>&#x624B;&#x52A8;&#x80CC;&#x666F;&#x8272;</span>
+            <div class="color-row">
+              <input id="manualKeyInput" type="color" value="#00ff00">
+              <code id="manualKeyLabel">#00FF00</code>
+            </div>
+          </label>
+
+          <label class="field chroma-only">
+            <span>&#x62A0;&#x56FE;&#x9608;&#x503C;</span>
+            <input id="thresholdInput" type="number" min="0" step="1" value="82">
+            <small>&#x8D8A;&#x5927;&#x62A0;&#x5F97;&#x8D8A;&#x72E0;&#xFF0C;&#x4EBA;&#x7269;&#x8FB9;&#x7F18;&#x4E5F;&#x66F4;&#x5BB9;&#x6613;&#x88AB;&#x5403;&#x6389;&#x3002;</small>
+          </label>
+
+          <label class="field chroma-only">
+            <span>&#x8F6F;&#x8FB9;&#x8FC7;&#x6E21;</span>
+            <input id="softnessInput" type="number" min="0" step="1" value="34">
+            <small>&#x63A7;&#x5236;&#x900F;&#x660E;&#x8FB9;&#x7F18;&#x7684;&#x8FC7;&#x6E21;&#x5BBD;&#x5EA6;&#x3002;</small>
+          </label>
+
+          <label class="field chroma-only">
+            <span>&#x53BB;&#x8272;&#x6EA2;&#x51FA;&#x5F3A;&#x5EA6;</span>
+            <input id="despillInput" type="number" min="0" max="2" step="0.05" value="0.85">
+            <small>&#x9488;&#x5BF9;&#x7EFF;&#x8272;&#x6B8B;&#x8FB9;&#x7684;&#x53BB;&#x8272;&#x5904;&#x7406;&#x3002;</small>
+          </label>
+
+          <label class="field chroma-only">
+            <span>Halo &#x6536;&#x7F29;&#x50CF;&#x7D20;</span>
+            <input id="haloInput" type="number" min="0" step="1" value="1">
+            <small>&#x628A;&#x900F;&#x660E;&#x8FB9;&#x7F18;&#x518D;&#x5F80;&#x91CC;&#x6536;&#x4E00;&#x70B9;&#xFF0C;&#x6E05;&#x7406;&#x810F;&#x8FB9;&#x3002;</small>
+          </label>
+        </div>
+
+        <div class="process-preview-grid">
+          <div class="process-preview-panel">
+            <div class="process-preview-head">
+              <div>
+                <h3>&#x5355;&#x5E27;&#x53C2;&#x6570;&#x9884;&#x89C8;</h3>
+                <p>&#x4E0D;&#x7528;&#x6574;&#x6BB5;&#x5904;&#x7406;&#xFF0C;&#x5148;&#x7528;&#x5F53;&#x524D;&#x64AD;&#x653E;&#x4F4D;&#x7F6E;&#x62BD;&#x4E00;&#x5E27;&#x770B;&#x6548;&#x679C;&#x3002;</p>
+              </div>
+              <div class="preview-meta">
+                <span id="processPreviewTimeLabel">&#x53D6;&#x6837;&#x65F6;&#x95F4; -</span>
+                <span id="processPreviewKeyLabel">&#x80CC;&#x666F;&#x8272; -</span>
+              </div>
+            </div>
+
+            <div class="process-preview-actions">
+              <button id="previewFrameButton" class="ghost-button" type="button">&#x9884;&#x89C8;&#x5F53;&#x524D;&#x5E27;&#x6548;&#x679C;</button>
+            </div>
+
+            <div class="process-preview-canvases">
+              <div class="image-preview-box">
+                <div class="image-preview-header">
+                  <span class="image-preview-title">&#x539F;&#x59CB;&#x62BD;&#x5E27;</span>
+                  <div class="image-zoom-controls">
+                    <button id="previewSourceZoomOutButton" class="ghost-button compact-button" type="button">-</button>
+                    <input id="previewSourceZoomInput" type="range" min="50" max="800" step="10" value="100">
+                    <span id="previewSourceZoomLabel" class="zoom-label">100%</span>
+                    <button id="previewSourceZoomResetButton" class="ghost-button compact-button" type="button">&#x91CD;&#x7F6E;</button>
+                    <button id="previewSourceZoomInButton" class="ghost-button compact-button" type="button">+</button>
+                  </div>
+                </div>
+                <div class="image-preview-stage">
+                  <img id="previewSourceImage" alt="source preview" hidden>
+                  <div id="previewSourceEmpty" class="preview-empty">&#x8FD8;&#x6CA1;&#x6709;&#x62BD;&#x53D6;&#x9884;&#x89C8;&#x5E27;&#x3002;</div>
+                </div>
+              </div>
+
+              <div class="image-preview-box">
+                <div class="image-preview-header">
+                  <span class="image-preview-title">&#x5957;&#x7528;&#x53C2;&#x6570;&#x540E;</span>
+                  <div class="image-zoom-controls">
+                    <button id="previewProcessedZoomOutButton" class="ghost-button compact-button" type="button">-</button>
+                    <input id="previewProcessedZoomInput" type="range" min="50" max="800" step="10" value="100">
+                    <span id="previewProcessedZoomLabel" class="zoom-label">100%</span>
+                    <button id="previewProcessedZoomResetButton" class="ghost-button compact-button" type="button">&#x91CD;&#x7F6E;</button>
+                    <button id="previewProcessedZoomInButton" class="ghost-button compact-button" type="button">+</button>
+                  </div>
+                </div>
+                <div class="image-preview-stage checkerboard-stage">
+                  <img id="previewProcessedImage" alt="processed preview" hidden>
+                  <div id="previewProcessedEmpty" class="preview-empty">&#x8FD9;&#x91CC;&#x4F1A;&#x663E;&#x793A;&#x62A0;&#x80CC;&#x666F;&#x3001;&#x8F6F;&#x8FB9;&#x3001;halo &#x548C;&#x7F29;&#x653E;&#x6548;&#x679C;&#x3002;</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="action-row">
+          <button id="processButton" class="primary-button" type="button">&#x5F00;&#x59CB;&#x5904;&#x7406;</button>
+        </div>
+        </div>
+      </section>
+
+      <section class="panel panel-wide" id="resultPanel" hidden>
+        <div class="panel-head">
+          <div>
+            <h2>4. &#x68C0;&#x67E5;&#x5E27;&#x5E76;&#x5BFC;&#x51FA;</h2>
+            <p>&#x8FD9;&#x91CC;&#x9ED8;&#x8BA4;&#x5168;&#x9009;&#x3002;&#x4F60;&#x53EF;&#x4EE5;&#x5FEB;&#x901F;&#x5207;&#x5947;&#x6570;&#x5E27;&#x3001;&#x5076;&#x6570;&#x5E27;&#xFF0C;&#x6216;&#x8005;&#x624B;&#x52A8;&#x53BB;&#x6389;&#x6296;&#x5F97;&#x5389;&#x5BB3;&#x7684;&#x5E27;&#x3002;</p>
+          </div>
+        </div>
+
+        <div id="jobSummary" class="result-summary"></div>
+
+        <div class="selection-toolbar">
+          <div class="selection-actions">
+            <button id="selectAllButton" class="secondary-button" type="button">&#x5168;&#x9009;</button>
+            <button id="selectNoneButton" class="secondary-button" type="button">&#x5168;&#x4E0D;&#x9009;</button>
+            <button id="selectOddButton" class="secondary-button" type="button">&#x5947;&#x6570;&#x5E27;</button>
+            <button id="selectEvenButton" class="secondary-button" type="button">&#x5076;&#x6570;&#x5E27;</button>
+            <button id="invertSelectionButton" class="secondary-button" type="button">&#x53CD;&#x9009;</button>
+          </div>
+          <div class="selection-meta">
+            <span id="selectionCount">&#x5DF2;&#x9009; 0 &#x5E27;</span>
+            <button id="openProcessedButton" class="ghost-button" type="button">&#x6253;&#x5F00;&#x5904;&#x7406;&#x76EE;&#x5F55;</button>
+          </div>
+        </div>
+
+        <div class="result-workbench">
+          <div class="preview-card">
+            <div class="preview-head">
+              <div>
+                <h3>&#x52A8;&#x753B;&#x9884;&#x89C8;</h3>
+                <p>&#x53EA;&#x4F1A;&#x64AD;&#x653E;&#x5F53;&#x524D;&#x52FE;&#x9009;&#x7684;&#x5E27;&#x3002;</p>
+              </div>
+              <div class="preview-meta">
+                <span id="previewFrameLabel">&#x5F53;&#x524D; -</span>
+                <span id="previewSelectedCount">&#x5DF2;&#x52A0;&#x8F7D; 0 &#x5E27;</span>
+              </div>
+            </div>
+
+            <div class="animation-stage">
+              <canvas id="animationPreviewCanvas" width="320" height="320"></canvas>
+              <div id="previewEmptyState" class="preview-empty">&#x52FE;&#x9009;&#x81F3;&#x5C11;&#x4E00;&#x5E27;&#x540E;&#xFF0C;&#x8FD9;&#x91CC;&#x4F1A;&#x5FAA;&#x73AF;&#x64AD;&#x653E;&#x52A8;&#x753B;&#x3002;</div>
+            </div>
+
+            <div class="preview-controls">
+              <button id="previewPlayPauseButton" class="secondary-button" type="button">&#x6682;&#x505C;&#x9884;&#x89C8;</button>
+              <button id="previewRestartButton" class="ghost-button" type="button">&#x4ECE;&#x5934;&#x64AD;&#x653E;</button>
+              <label class="field compact-field">
+                <span>&#x5E27;&#x95F4;&#x9694;&#xFF08;&#x6BEB;&#x79D2;&#xFF09;</span>
+                <input id="previewIntervalInput" type="number" min="20" step="10" value="100">
+              </label>
+            </div>
+          </div>
+
+          <div class="frames-panel">
+            <div class="frames-panel-head">
+              <h3>&#x5E27;&#x5217;&#x8868;</h3>
+              <p>&#x53F3;&#x8FB9;&#x7EE7;&#x7EED;&#x9009;&#x5E27;&#xFF0C;&#x5DE6;&#x8FB9;&#x4F1A;&#x7ACB;&#x5373;&#x66F4;&#x65B0;&#x64AD;&#x653E;&#x5E8F;&#x5217;&#x3002;</p>
+            </div>
+            <div id="frameGrid" class="frame-grid"></div>
+          </div>
+        </div>
+
+        <div class="export-bar">
+          <label class="field compact-field">
+            <span>Sprite Sheet &#x5217;&#x6570;</span>
+            <input id="sheetColumnsInput" type="number" min="1" step="1" value="4">
+          </label>
+          <button id="exportButton" class="primary-button" type="button">&#x5BFC;&#x51FA;&#x9009;&#x4E2D;&#x5E27;</button>
+        </div>
+
+        <div id="exportResult" class="export-result" hidden></div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div id="appStatus" class="status-message">&#x7B49;&#x5F85;&#x5BFC;&#x5165;&#x89C6;&#x9891;&#x3002;</div>
+    </footer>
+  </div>
+
+  <script src="/app/app.js"></script>
+</body>
+</html>
