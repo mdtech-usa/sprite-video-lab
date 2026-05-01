@@ -4,13 +4,15 @@ const state = {
   exportResult: null,
   processPreview: null,
   selected: new Set(),
-  segment: { start: 0, end: 0, confirmed: false },
+  segment: { start: 0, end: 0, startFrame: 1, endFrame: 1, confirmed: false },
   preview: {
-    timerId: null,
+    rafId: null,
     currentIndex: 0,
     isPlaying: true,
     renderToken: 0,
+    warmupToken: 0,
     imageCache: new Map(),
+    background: "#F6FBF6",
   },
   processPreviewZoom: {
     source: 100,
@@ -30,6 +32,7 @@ let uploadDragDepth = 0;
 document.addEventListener("DOMContentLoaded", () => {
   bindElements();
   bindEvents();
+  updatePreviewBackground(state.preview.background, false);
   syncManualColorLabel();
   updateChromaVisibility();
   normalizePreviewInterval();
@@ -37,7 +40,7 @@ document.addEventListener("DOMContentLoaded", () => {
   drawPreviewPlaceholder();
   resetProcessPreview();
   updateSegmentConfirmationUI();
-  setStatus("\u7b49\u5f85\u5bfc\u5165\u89c6\u9891\u6216\u5355\u5f20\u56fe\u7247\u3002");
+  setStatus("\u7B49\u5F85\u5BFC\u5165\u7D20\u6750\u3002");
   restoreSessionFromStorage();
   startHotReloadPolling();
   window.addEventListener("beforeunload", persistSession);
@@ -58,21 +61,26 @@ function bindElements() {
     "resultPanel",
     "videoPreview",
     "mediaPreviewImage",
+    "videoProgress",
+    "videoProgressFill",
     "videoToolbar",
-    "loopSegmentToggle",
     "currentTimeLabel",
     "startRange",
     "startInput",
+    "startStepUpButton",
+    "startStepDownButton",
     "endRange",
     "endInput",
+    "endStepUpButton",
+    "endStepDownButton",
     "segmentLength",
-    "confirmSegmentButton",
     "segmentConfirmStatus",
     "segmentConfirmHint",
     "keepEveryInput",
     "targetSizeInput",
     "reducePxInput",
     "chromaEnabledInput",
+    "matteModeInput",
     "keyModeInput",
     "manualColorField",
     "manualKeyInput",
@@ -81,6 +89,13 @@ function bindElements() {
     "softnessInput",
     "despillInput",
     "haloInput",
+    "aiModelInput",
+    "aiDeviceInput",
+    "aiResolutionInput",
+    "lumaBlackInput",
+    "lumaWhiteInput",
+    "lumaGammaInput",
+    "lumaStrengthInput",
     "previewFrameButton",
     "processPreviewTimeLabel",
     "processPreviewKeyLabel",
@@ -108,8 +123,13 @@ function bindElements() {
     "previewEmptyState",
     "previewFrameLabel",
     "previewSelectedCount",
+    "previewProgressBar",
+    "previewProgressFill",
+    "previewProgressLabel",
     "previewPlayPauseButton",
     "previewRestartButton",
+    "previewBackgroundInput",
+    "previewBackgroundLabel",
     "previewIntervalInput",
     "frameGrid",
     "selectAllButton",
@@ -132,11 +152,19 @@ function bindEvents() {
   els.previewFrameButton.addEventListener("click", previewCurrentFrame);
   els.processButton.addEventListener("click", processVideo);
   els.exportButton.addEventListener("click", exportFrames);
-  els.confirmSegmentButton.addEventListener("click", confirmSegmentSelection);
   bindUploadDropzone();
 
-  bindTimePair("start", els.startRange, els.startInput);
-  bindTimePair("end", els.endRange, els.endInput);
+  bindTimePair("start", els.startRange, els.startInput, els.startStepDownButton, els.startStepUpButton);
+  bindTimePair("end", els.endRange, els.endInput, els.endStepDownButton, els.endStepUpButton);
+
+  els.videoPreview.addEventListener("loadedmetadata", () => {
+    if (!isVideoUpload()) {
+      return;
+    }
+    muteVideoPreview();
+    updateVideoProgress(state.segment.start || 0);
+    restartSegmentPlayback({ autoplay: false });
+  });
 
   els.videoPreview.addEventListener("timeupdate", () => {
     if (!isVideoUpload()) {
@@ -144,30 +172,20 @@ function bindEvents() {
     }
     const current = els.videoPreview.currentTime || 0;
     els.currentTimeLabel.textContent = `\u5f53\u524d ${formatSeconds(current)}`;
+    updateVideoProgress(current);
     if (
-      els.loopSegmentToggle.checked &&
       state.upload &&
-      state.segment.confirmed &&
       state.segment.end > state.segment.start &&
-      current >= state.segment.end
+      current >= Math.max(state.segment.end - 0.01, state.segment.start)
     ) {
-      els.videoPreview.currentTime = state.segment.start;
+      restartSegmentPlayback({ autoplay: true });
     }
   });
 
   els.manualKeyInput.addEventListener("input", syncManualColorLabel);
+  els.matteModeInput.addEventListener("change", updateChromaVisibility);
   els.keyModeInput.addEventListener("change", updateChromaVisibility);
   els.chromaEnabledInput.addEventListener("change", updateChromaVisibility);
-  els.loopSegmentToggle.addEventListener("change", () => {
-    if (!isVideoUpload()) {
-      persistSession();
-      return;
-    }
-    if (els.loopSegmentToggle.checked && state.segment.confirmed) {
-      els.videoPreview.currentTime = state.segment.start;
-    }
-    persistSession();
-  });
 
   els.frameGrid.addEventListener("change", (event) => {
     const target = event.target;
@@ -218,6 +236,10 @@ function bindEvents() {
 
   els.previewPlayPauseButton.addEventListener("click", togglePreviewPlayback);
   els.previewRestartButton.addEventListener("click", restartPreviewPlayback);
+  els.previewBackgroundInput.addEventListener("input", () => {
+    updatePreviewBackground(els.previewBackgroundInput.value, true);
+    syncAnimationPreview(false);
+  });
   els.previewIntervalInput.addEventListener("change", () => {
     normalizePreviewInterval();
     restartPreviewTimer();
@@ -237,6 +259,14 @@ function bindEvents() {
     els.softnessInput,
     els.despillInput,
     els.haloInput,
+    els.matteModeInput,
+    els.aiModelInput,
+    els.aiDeviceInput,
+    els.aiResolutionInput,
+    els.lumaBlackInput,
+    els.lumaWhiteInput,
+    els.lumaGammaInput,
+    els.lumaStrengthInput,
     els.startInput,
     els.endInput,
   ].forEach((element) => {
@@ -245,16 +275,42 @@ function bindEvents() {
   });
 }
 
-function bindTimePair(key, rangeEl, numberEl) {
-  const handler = (event) => {
-    state.segment[key] = Number(event.target.value || 0);
+function bindTimePair(key, rangeEl, numberEl, decreaseButton, increaseButton) {
+  const frameKey = key === "start" ? "startFrame" : "endFrame";
+  const applySegmentFrame = (nextFrame) => {
+    state.segment[frameKey] = clampSegmentFrame(nextFrame);
     normalizeSegment(key);
-    invalidateConfirmedSegment();
     renderSegmentControls();
+    updateSegmentConfirmationUI();
+    restartSegmentPlayback({ autoplay: true });
     persistSession();
   };
+
+  const handler = (event) => {
+    const nextValue = Number(event.target.value);
+    if (Number.isNaN(nextValue)) {
+      return;
+    }
+    applySegmentFrame(nextValue);
+  };
+
   rangeEl.addEventListener("input", handler);
+  numberEl.addEventListener("input", handler);
   numberEl.addEventListener("change", handler);
+  decreaseButton.addEventListener("click", () => {
+    applySegmentFrame(state.segment[frameKey] - 1);
+  });
+  increaseButton.addEventListener("click", () => {
+    applySegmentFrame(state.segment[frameKey] + 1);
+  });
+  numberEl.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+      return;
+    }
+    event.preventDefault();
+    const direction = event.key === "ArrowUp" ? 1 : -1;
+    applySegmentFrame(state.segment[frameKey] + direction);
+  });
 }
 
 function bindProcessPreviewZoom(kind) {
@@ -294,24 +350,39 @@ function updateProcessPreviewZoom(kind, value, shouldPersist = false) {
   }
 }
 
+function currentMatteMode() {
+  if (!els.chromaEnabledInput.checked) {
+    return "none";
+  }
+  return els.matteModeInput.value || "chroma";
+}
+
 function collectFormState() {
   return {
     keep_every: Number(els.keepEveryInput.value || 1),
     target_size: Number(els.targetSizeInput.value || 128),
     reduce_px: Number(els.reducePxInput.value || 0),
     chroma_enabled: els.chromaEnabledInput.checked,
+    matte_mode: currentMatteMode(),
     key_mode: els.keyModeInput.value,
     manual_key_hex: els.manualKeyInput.value,
     threshold: Number(els.thresholdInput.value || 0),
     softness: Number(els.softnessInput.value === "" ? 1 : els.softnessInput.value),
     despill_strength: Number(els.despillInput.value || 0),
     halo_pixels: Number(els.haloInput.value || 0),
+    ai_model: els.aiModelInput.value,
+    ai_device: els.aiDeviceInput.value,
+    ai_resolution: Number(els.aiResolutionInput.value || 1024),
+    luma_black: Number(els.lumaBlackInput.value || 24),
+    luma_white: Number(els.lumaWhiteInput.value || 230),
+    luma_gamma: Number(els.lumaGammaInput.value || 1),
+    luma_strength: Number(els.lumaStrengthInput.value || 1),
+    preview_background: state.preview.background,
     preview_interval: clamp(Number(els.previewIntervalInput.value || 100), 20, 5000),
     process_preview_zoom: {
       source: state.processPreviewZoom.source,
       processed: state.processPreviewZoom.processed,
     },
-    loop_segment: els.loopSegmentToggle.checked,
     segment: {
       start: Number(state.segment.start || 0),
       end: Number(state.segment.end || 0),
@@ -329,12 +400,20 @@ function collectProcessingPayload() {
     target_size: Number(els.targetSizeInput.value || 128),
     reduce_px: Number(els.reducePxInput.value || 0),
     chroma_enabled: els.chromaEnabledInput.checked,
+    matte_mode: currentMatteMode(),
     key_mode: els.keyModeInput.value,
     manual_key_hex: els.manualKeyInput.value,
     threshold: Number(els.thresholdInput.value || 0),
     softness: Number(els.softnessInput.value === "" ? 1 : els.softnessInput.value),
     despill_strength: Number(els.despillInput.value || 0),
     halo_pixels: Number(els.haloInput.value || 0),
+    ai_model: els.aiModelInput.value,
+    ai_device: els.aiDeviceInput.value,
+    ai_resolution: Number(els.aiResolutionInput.value || 1024),
+    luma_black: Number(els.lumaBlackInput.value || 24),
+    luma_white: Number(els.lumaWhiteInput.value || 230),
+    luma_gamma: Number(els.lumaGammaInput.value || 1),
+    luma_strength: Number(els.lumaStrengthInput.value || 1),
   };
 }
 
@@ -347,14 +426,28 @@ function applyFormState(snapshot) {
   if (snapshot.target_size != null) els.targetSizeInput.value = String(snapshot.target_size);
   if (snapshot.reduce_px != null) els.reducePxInput.value = String(snapshot.reduce_px);
   if (snapshot.chroma_enabled != null) els.chromaEnabledInput.checked = Boolean(snapshot.chroma_enabled);
+  if (snapshot.matte_mode && [...els.matteModeInput.options].some((option) => option.value === snapshot.matte_mode)) {
+    els.matteModeInput.value = snapshot.matte_mode;
+  }
   if (snapshot.key_mode) els.keyModeInput.value = snapshot.key_mode;
   if (snapshot.manual_key_hex) els.manualKeyInput.value = snapshot.manual_key_hex;
   if (snapshot.threshold != null) els.thresholdInput.value = String(snapshot.threshold);
   if (snapshot.softness != null) els.softnessInput.value = String(snapshot.softness);
   if (snapshot.despill_strength != null) els.despillInput.value = String(snapshot.despill_strength);
   if (snapshot.halo_pixels != null) els.haloInput.value = String(snapshot.halo_pixels);
+  if (snapshot.ai_model && [...els.aiModelInput.options].some((option) => option.value === snapshot.ai_model)) {
+    els.aiModelInput.value = snapshot.ai_model;
+  }
+  if (snapshot.ai_device && [...els.aiDeviceInput.options].some((option) => option.value === snapshot.ai_device)) {
+    els.aiDeviceInput.value = snapshot.ai_device;
+  }
+  if (snapshot.ai_resolution != null) els.aiResolutionInput.value = String(snapshot.ai_resolution);
+  if (snapshot.luma_black != null) els.lumaBlackInput.value = String(snapshot.luma_black);
+  if (snapshot.luma_white != null) els.lumaWhiteInput.value = String(snapshot.luma_white);
+  if (snapshot.luma_gamma != null) els.lumaGammaInput.value = String(snapshot.luma_gamma);
+  if (snapshot.luma_strength != null) els.lumaStrengthInput.value = String(snapshot.luma_strength);
+  updatePreviewBackground(snapshot.preview_background || state.preview.background, false);
   if (snapshot.preview_interval != null) els.previewIntervalInput.value = String(snapshot.preview_interval);
-  if (snapshot.loop_segment != null) els.loopSegmentToggle.checked = Boolean(snapshot.loop_segment);
   if (snapshot.process_preview_zoom) {
     updateProcessPreviewZoom("source", Number(snapshot.process_preview_zoom.source || 100), false);
     updateProcessPreviewZoom("processed", Number(snapshot.process_preview_zoom.processed || 100), false);
@@ -366,6 +459,7 @@ function applyFormState(snapshot) {
   if (snapshot.segment) {
     state.segment.start = Number(snapshot.segment.start || 0);
     state.segment.end = Number(snapshot.segment.end || 0);
+    syncSegmentFramesFromTimes();
     state.segment.confirmed = Boolean(snapshot.segment.confirmed);
   }
 
@@ -422,6 +516,7 @@ function restoreSessionFromStorage() {
     normalizeSegment("end");
     renderSegmentControls();
     updateSegmentConfirmationUI();
+    restartSegmentPlayback({ autoplay: false });
   }
 
   if (snapshot.preview && typeof snapshot.preview.isPlaying === "boolean") {
@@ -585,6 +680,28 @@ function formatSourceModeLabel(ffmpegAccel, sourceMediaType = uploadMediaType())
   return `FFmpeg ${formatFfmpegAccelLabel(ffmpegAccel)}`;
 }
 
+function formatMatteModeLabel(matte) {
+  const mode = typeof matte === "string" ? matte : (matte?.mode || "chroma");
+  if (mode === "none") return "\u4E0D\u62A0\u56FE";
+  if (mode === "birefnet") return "BiRefNet";
+  if (mode === "birefnet_luma") return "BiRefNet + Luma";
+  return "\u7EAF\u8272\u62A0\u56FE";
+}
+
+function formatMatteDetail(matte) {
+  if (!matte || matte.mode === "chroma") {
+    return "";
+  }
+  if (matte.mode === "none") {
+    return "";
+  }
+  const parts = [matte.model_label || formatMatteModeLabel(matte)];
+  if (matte.resolution) {
+    parts.push(`${matte.resolution}px`);
+  }
+  return parts.join(" / ");
+}
+
 async function importFromPath() {
   const path = els.pathInput.value.trim();
   if (!path) {
@@ -654,15 +771,17 @@ function applyUpload(upload) {
 
   const info = currentUploadInfo(upload);
   const mediaType = uploadMediaType(upload);
-  const duration = Number(info.duration || 0);
   state.segment.start = 0;
-  state.segment.end = mediaType === "video" ? (duration > 0 ? duration : 1) : 0;
-  state.segment.confirmed = mediaType === "image";
+  state.segment.startFrame = 1;
+  state.segment.endFrame = mediaType === "video" ? getSegmentFrameCount(upload) : 1;
+  state.segment.end = mediaType === "video" ? segmentFrameToTime(getSegmentFrameCount(upload), "end", upload) : 0;
+  state.segment.confirmed = true;
+  normalizeSegment("end");
 
   els.videoName.textContent = upload.display_name || (mediaType === "image" ? "\u672a\u547d\u540d\u56fe\u7247" : "\u672a\u547d\u540d\u89c6\u9891");
   els.videoSize.textContent = info.width && info.height ? `${info.width} \u00d7 ${info.height}` : "-";
   els.videoFps.textContent = mediaType === "image" ? "\u5355\u5e27\u56fe\u7247" : (info.fps ? `${Number(info.fps).toFixed(2)} fps` : "-");
-  els.videoDuration.textContent = mediaType === "image" ? "\u5355\u5f20\u56fe\u7247" : (duration > 0 ? formatSeconds(duration) : "-");
+  els.videoDuration.textContent = mediaType === "image" ? "\u5355\u5f20\u56fe\u7247" : (Number(info.duration || 0) > 0 ? formatSeconds(info.duration) : "-");
 
   els.previewPanel.hidden = false;
   els.processPanel.hidden = false;
@@ -686,6 +805,7 @@ function applyUpload(upload) {
     els.mediaPreviewImage.hidden = true;
     els.mediaPreviewImage.removeAttribute("src");
     els.videoPreview.hidden = false;
+    muteVideoPreview();
     els.videoPreview.src = mediaUrl;
     els.videoPreview.load();
   }
@@ -706,7 +826,7 @@ function resetProcessPreview() {
   els.previewSourceEmpty.hidden = false;
   els.previewProcessedEmpty.hidden = false;
   els.processPreviewTimeLabel.textContent = "\u53D6\u6837\u65F6\u95F4 -";
-  els.processPreviewKeyLabel.textContent = "\u53D6\u6837\u65B9\u5F0F - / \u80CC\u666F\u8272 -";
+  els.processPreviewKeyLabel.textContent = "\u53D6\u6837\u65B9\u5F0F - / \u62A0\u56FE -";
 }
 
 function renderProcessPreview() {
@@ -728,20 +848,34 @@ function renderProcessPreview() {
   els.processPreviewTimeLabel.textContent = isImageUpload()
     ? "\u5355\u5F20\u56FE\u7247\u9884\u89C8"
     : `\u53D6\u6837\u65F6\u95F4 ${formatSeconds(state.processPreview.sample_time || 0)}`;
-  els.processPreviewKeyLabel.textContent = `${sourceModeLabel} / \u80CC\u666F\u8272 ${state.processPreview.key_color || "-"}`;
+  const matte = state.processPreview.matte || { mode: state.processPreview.options?.matte_mode || "chroma" };
+  const matteLabel = formatMatteModeLabel(matte);
+  const matteDetail = formatMatteDetail(matte);
+  const chromaDetail = matte.mode === "chroma" ? ` / \u80CC\u666F\u8272 ${state.processPreview.key_color || "-"}` : "";
+  els.processPreviewKeyLabel.textContent = `${sourceModeLabel} / ${matteLabel}${matteDetail ? ` / ${matteDetail}` : ""}${chromaDetail}`;
   persistSession();
 }
 
 function syncSegmentBounds() {
   if (isImageUpload()) {
-    [els.startRange, els.startInput, els.endRange, els.endInput].forEach((element) => {
-      element.max = "0";
+    [els.startRange, els.endRange].forEach((element) => {
+      element.step = "1";
+      element.min = "1";
+      element.max = "1";
+    });
+    [els.startInput, els.endInput].forEach((element) => {
+      element.max = "1";
     });
     return;
   }
-  const duration = Math.max(Number(currentUploadInfo().duration || 0), 0.01);
-  [els.startRange, els.startInput, els.endRange, els.endInput].forEach((element) => {
-    element.max = duration.toFixed(2);
+  const frameCount = getSegmentFrameCount();
+  [els.startRange, els.endRange].forEach((element) => {
+    element.step = "1";
+    element.min = "1";
+    element.max = String(frameCount);
+  });
+  [els.startInput, els.endInput].forEach((element) => {
+    element.max = String(frameCount);
   });
 }
 
@@ -749,71 +883,88 @@ function normalizeSegment(changedKey) {
   if (isImageUpload()) {
     state.segment.start = 0;
     state.segment.end = 0;
+    state.segment.startFrame = 1;
+    state.segment.endFrame = 1;
     return;
   }
-  const duration = Math.max(Number(currentUploadInfo().duration || 0), 0.01);
-  let start = clamp(Number(state.segment.start || 0), 0, duration);
-  let end = clamp(Number(state.segment.end || duration), 0, duration);
+  let startFrame = clampSegmentFrame(state.segment.startFrame);
+  let endFrame = clampSegmentFrame(state.segment.endFrame);
 
-  if (end <= start) {
+  if (endFrame < startFrame) {
     if (changedKey === "start") {
-      end = Math.min(duration, start + 0.04);
+      endFrame = startFrame;
     } else {
-      start = Math.max(0, end - 0.04);
+      startFrame = endFrame;
     }
   }
 
-  if (end <= start) {
-    end = Math.min(duration, start + 0.01);
+  state.segment.startFrame = startFrame;
+  state.segment.endFrame = endFrame;
+  syncSegmentTimesFromFrames();
+}
+
+function muteVideoPreview() {
+  els.videoPreview.defaultMuted = true;
+  els.videoPreview.muted = true;
+  try {
+    els.videoPreview.volume = 0;
+  } catch (error) {}
+}
+
+function playVideoPreviewMuted() {
+  muteVideoPreview();
+  const playPromise = els.videoPreview.play();
+  if (playPromise && typeof playPromise.catch === "function") {
+    playPromise.catch(() => {});
+  }
+}
+
+function restartSegmentPlayback({ autoplay = true } = {}) {
+  if (!state.upload || !isVideoUpload() || els.videoPreview.readyState < 1) {
+    return;
+  }
+  const duration = Math.max(Number(currentUploadInfo().duration || 0), 0);
+  const segmentStart = clamp(Number(state.segment.start || 0), 0, duration);
+  els.videoPreview.currentTime = segmentStart;
+  els.currentTimeLabel.textContent = `\u5f53\u524d ${formatSeconds(segmentStart)}`;
+  updateVideoProgress(segmentStart);
+  if (autoplay) {
+    playVideoPreviewMuted();
+  }
+}
+
+function updateVideoProgress(currentTime = 0) {
+  if (!els.videoProgressFill) {
+    return;
   }
 
-  state.segment.start = Number(start.toFixed(2));
-  state.segment.end = Number(end.toFixed(2));
+  if (!state.upload || !isVideoUpload()) {
+    els.videoProgressFill.style.width = "0%";
+    return;
+  }
+
+  const duration = Math.max(Number(currentUploadInfo().duration || 0), 0);
+  const segmentStart = clamp(Number(state.segment.start || 0), 0, duration);
+  const segmentEnd = clamp(Number(state.segment.end || duration), segmentStart, duration);
+  const segmentLength = Math.max(segmentEnd - segmentStart, 0.01);
+  const normalizedCurrent = clamp(Number(currentTime || 0), segmentStart, segmentEnd);
+  const progress = ((normalizedCurrent - segmentStart) / segmentLength) * 100;
+  els.videoProgressFill.style.width = `${clamp(progress, 0, 100)}%`;
 }
 
 function renderSegmentControls() {
-  els.startRange.value = String(state.segment.start);
-  els.startInput.value = state.segment.start.toFixed(2);
-  els.endRange.value = String(state.segment.end);
-  els.endInput.value = state.segment.end.toFixed(2);
-  els.segmentLength.textContent = formatSeconds(Math.max(0, state.segment.end - state.segment.start));
-}
-
-function invalidateConfirmedSegment() {
-  resetProcessPreview();
-  if (!state.segment.confirmed) {
-    updateSegmentConfirmationUI();
-    return;
-  }
-  state.segment.confirmed = false;
-  updateSegmentConfirmationUI();
-}
-
-function confirmSegmentSelection() {
-  if (!state.upload) {
-    setStatus("\u5148\u5BFC\u5165\u89C6\u9891\u6216\u56FE\u7247\uFF0C\u518D\u8FDB\u5165\u7B2C 2 \u6B65\u3002", "error");
-    return;
-  }
-  if (isImageUpload()) {
-    state.segment.start = 0;
-    state.segment.end = 0;
-    state.segment.confirmed = true;
-    updateSegmentConfirmationUI();
-    persistSession();
-    setStatus("\u5DF2\u8F7D\u5165\u5355\u5F20\u56FE\u7247\uFF0C\u53EF\u4EE5\u76F4\u63A5\u8FDB\u5165\u7B2C 3 \u6B65\u3002", "success");
-    return;
-  }
-  normalizeSegment("end");
-  state.segment.confirmed = true;
-  updateSegmentConfirmationUI();
-  if (els.loopSegmentToggle.checked) {
-    els.videoPreview.currentTime = state.segment.start;
-  }
-  persistSession();
-  setStatus(`\u5DF2\u786E\u5B9A\u9009\u533A ${formatSeconds(state.segment.start)} - ${formatSeconds(state.segment.end)}\u3002`, "success");
+  const startFrame = clampSegmentFrame(state.segment.startFrame);
+  const endFrame = clampSegmentFrame(state.segment.endFrame);
+  els.startRange.value = String(startFrame);
+  els.startInput.value = String(startFrame);
+  els.endRange.value = String(endFrame);
+  els.endInput.value = String(endFrame);
+  els.segmentLength.textContent = `${Math.max(1, endFrame - startFrame + 1)} \u5E27`;
+  updateVideoProgress(isVideoUpload() ? (els.videoPreview.currentTime || state.segment.start || 0) : 0);
 }
 
 function updateSegmentConfirmationUI() {
+  const hasUpload = Boolean(state.upload);
   const isImage = isImageUpload();
   const startField = els.startRange.closest(".field");
   const endField = els.endRange.closest(".field");
@@ -821,39 +972,46 @@ function updateSegmentConfirmationUI() {
   if (startField) startField.hidden = isImage;
   if (endField) endField.hidden = isImage;
   if (segmentSummary) segmentSummary.hidden = isImage;
-  els.videoToolbar.hidden = isImage;
-  els.loopSegmentToggle.disabled = isImage;
+  els.videoToolbar.hidden = isImage || !hasUpload;
+  els.videoProgress.hidden = isImage || !hasUpload;
 
   if (isImage) {
     state.segment.start = 0;
     state.segment.end = 0;
     state.segment.confirmed = true;
-    els.segmentConfirmStatus.className = "segment-status confirmed";
+    els.segmentConfirmStatus.className = "segment-status image";
     els.segmentConfirmStatus.textContent = "\u5355\u5F20\u56FE\u7247\u6A21\u5F0F";
-    els.segmentConfirmHint.textContent = "\u65E0\u9700\u786E\u8BA4\u9009\u533A\uFF0C\u5F53\u524D\u53C2\u6570\u4F1A\u76F4\u63A5\u4F5C\u7528\u4E8E\u8FD9 1 \u5E27\u3002";
-    els.confirmSegmentButton.textContent = "\u5355\u5F20\u56FE\u7247\u65E0\u9700\u786E\u8BA4";
-    els.confirmSegmentButton.disabled = true;
-    els.previewFrameButton.disabled = false;
-    els.processButton.disabled = false;
+    els.segmentConfirmHint.textContent = "\u65E0\u9700\u8C03\u6574\u65F6\u95F4\u8303\u56F4\u3002\u5F53\u524D\u53C2\u6570\u4F1A\u76F4\u63A5\u4F5C\u7528\u4E8E\u8FD9 1 \u5E27\u3002";
+    els.previewFrameButton.disabled = !hasUpload;
+    els.processButton.disabled = !hasUpload;
     els.processStepShell.classList.remove("locked");
     els.processLockNote.hidden = true;
+    updateVideoProgress(0);
     return;
   }
 
-  const confirmed = Boolean(state.segment.confirmed);
-  els.segmentConfirmStatus.className = `segment-status ${confirmed ? "confirmed" : "pending"}`;
-  els.segmentConfirmStatus.textContent = confirmed
-    ? `\u5DF2\u786E\u5B9A\u9009\u533A ${formatSeconds(state.segment.start)} - ${formatSeconds(state.segment.end)}`
-    : "\u8FD8\u672A\u786E\u5B9A\u9009\u533A";
-  els.segmentConfirmHint.textContent = confirmed
-    ? "\u89C6\u9891\u9884\u89C8\u4F1A\u6309\u5DF2\u786E\u8BA4\u533A\u95F4\u5FAA\u73AF\uFF0C\u73B0\u5728\u53EF\u4EE5\u8FDB\u5165\u7B2C 3 \u6B65\u3002"
-    : "\u53EA\u6709\u70B9\u8FC7\u201C\u786E\u5B9A\u9009\u533A\u201D\u540E\uFF0C\u624D\u80FD\u8FDB\u884C\u5355\u5E27\u9884\u89C8\u548C\u6574\u6BB5\u5904\u7406\u3002";
-  els.confirmSegmentButton.textContent = confirmed ? "\u91CD\u65B0\u786E\u5B9A\u9009\u533A" : "\u786E\u5B9A\u9009\u533A";
-  els.confirmSegmentButton.disabled = false;
-  els.previewFrameButton.disabled = !confirmed;
-  els.processButton.disabled = !confirmed;
-  els.processStepShell.classList.toggle("locked", !confirmed);
-  els.processLockNote.hidden = confirmed;
+  if (!hasUpload) {
+    state.segment.confirmed = false;
+    els.segmentConfirmStatus.className = "segment-status";
+    els.segmentConfirmStatus.textContent = "\u5148\u5BFC\u5165\u7D20\u6750";
+    els.segmentConfirmHint.textContent = "\u8F7D\u5165\u89C6\u9891\u540E\uFF0C\u8FD9\u91CC\u4F1A\u5B9E\u65F6\u9884\u89C8\u5E76\u5FAA\u73AF\u5F53\u524D\u9009\u533A\u3002";
+    els.previewFrameButton.disabled = true;
+    els.processButton.disabled = true;
+    els.processStepShell.classList.add("locked");
+    els.processLockNote.hidden = false;
+    updateVideoProgress(0);
+    return;
+  }
+
+  state.segment.confirmed = true;
+  els.segmentConfirmStatus.className = "segment-status confirmed";
+  els.segmentConfirmStatus.textContent = `\u5F53\u524D\u9009\u533A \u7B2C ${state.segment.startFrame} \u5E27 - \u7B2C ${state.segment.endFrame} \u5E27`;
+  els.segmentConfirmHint.textContent = "\u62D6\u52A8\u8D77\u70B9\u6216\u7EC8\u70B9\u540E\uFF0C\u5DE6\u4FA7\u89C6\u9891\u4F1A\u7ACB\u5373\u8DF3\u56DE\u65B0\u8D77\u70B9\u5E76\u9759\u97F3\u5FAA\u73AF\u3002";
+  els.previewFrameButton.disabled = false;
+  els.processButton.disabled = false;
+  els.processStepShell.classList.remove("locked");
+  els.processLockNote.hidden = true;
+  updateVideoProgress(els.videoPreview.currentTime || state.segment.start || 0);
 }
 
 async function processVideo() {
@@ -861,17 +1019,16 @@ async function processVideo() {
     setStatus("\u5148\u5BFC\u5165\u89C6\u9891\u6216\u56FE\u7247\uFF0C\u518D\u5904\u7406\u3002", "error");
     return;
   }
-  if (!state.segment.confirmed) {
-    setStatus("\u5148\u5728\u7B2C 2 \u6B65\u786E\u5B9A\u9009\u533A\uFF0C\u518D\u5F00\u59CB\u5904\u7406\u3002", "error");
-    return;
-  }
 
   const payload = collectProcessingPayload();
 
   await withBusy(els.processButton, async () => {
     stopPreviewTimer();
+    const matteMode = currentMatteMode();
     setStatus(
-      isImageUpload()
+      matteMode.startsWith("birefnet")
+        ? "正在运行 BiRefNet AI 抠图。首次使用需要准备本地模型。"
+        : isImageUpload()
         ? "\u6B63\u5728\u5904\u7406\u5355\u5F20\u56FE\u7247\u7684\u900F\u660E\u8FB9\u7F18\u548C\u7F29\u653E..."
         : "\u6b63\u5728\u62bd\u5e27\u5e76\u5904\u7406\u900f\u660e\u8fb9\u7f18\uff0c\u8fd9\u4e00\u6b65\u53ef\u80fd\u9700\u8981\u51e0\u5341\u79d2\u3002"
     );
@@ -896,10 +1053,6 @@ async function previewCurrentFrame() {
     setStatus("\u5148\u5BFC\u5165\u89C6\u9891\u6216\u56FE\u7247\uFF0C\u518D\u9884\u89C8\u53C2\u6570\u6548\u679C\u3002", "error");
     return;
   }
-  if (!state.segment.confirmed) {
-    setStatus("\u5148\u5728\u7B2C 2 \u6B65\u786E\u5B9A\u9009\u533A\uFF0C\u518D\u9884\u89C8\u5F53\u524D\u5E27\u6548\u679C\u3002", "error");
-    return;
-  }
 
   const duration = Number(currentUploadInfo().duration || 0);
   const rawCurrentTime = isImageUpload() ? 0 : Number(els.videoPreview.currentTime || state.segment.start || 0);
@@ -910,8 +1063,11 @@ async function previewCurrentFrame() {
   };
 
   await withBusy(els.previewFrameButton, async () => {
+    const matteMode = currentMatteMode();
     setStatus(
-      isImageUpload()
+      matteMode.startsWith("birefnet")
+        ? "正在用 BiRefNet 预览当前帧抠图，首次使用需要准备本地模型..."
+        : isImageUpload()
         ? "\u6B63\u5728\u5957\u7528\u53C2\u6570\u9884\u89C8\u5355\u5F20\u56FE\u7247..."
         : "\u6b63\u5728\u62BD\u53D6\u5F53\u524D\u5E27\u5E76\u5957\u7528\u53C2\u6570..."
     );
@@ -937,20 +1093,25 @@ function renderJob() {
 
   const options = state.job.options || {};
   const keyColor = options.key_color || "#000000";
+  const matte = options.matte || { mode: options.matte_mode || (options.chroma_enabled ? "chroma" : "none") };
+  const matteDetail = formatMatteDetail(matte);
   const sourceMediaType = state.job.source_media_type || uploadMediaType();
   const segmentLabel = sourceMediaType === "image"
     ? "\u5355\u5F20\u56FE\u7247\u8F93\u5165"
     : `${formatSeconds(options.start_time || 0)} - ${formatSeconds(options.end_time || 0)}`;
   els.resultPanel.hidden = false;
   els.exportResult.hidden = true;
-  els.jobSummary.innerHTML = [
+  const summaryCards = [
     summaryCard("\u4efb\u52a1 ID", escapeHtml(state.job.job_id)),
     summaryCard("\u8f93\u51fa\u5e27\u6570", `${state.job.frame_count} \u5e27`),
     summaryCard("\u53D6\u6837\u65B9\u5F0F", escapeHtml(formatSourceModeLabel(state.job.ffmpeg_accel, sourceMediaType))),
+    summaryCard("\u62A0\u56FE\u6A21\u5F0F", escapeHtml(`${formatMatteModeLabel(matte)}${matteDetail ? ` / ${matteDetail}` : ""}`)),
     summaryCard("\u76ee\u6807\u753b\u5e03", `${options.target_size || "-"} \u00d7 ${options.target_size || "-"}`),
     summaryCard("\u62BD\u5E27\u95F4\u9694", sourceMediaType === "image" ? "\u5355\u5F20\u56FE\u7247" : `\u6BCF ${options.keep_every || 1} \u5E27\u4FDD\u7559\u4E00\u5F20`),
     summaryCard("\u8F93\u5165\u533A\u95F4", segmentLabel),
-    `
+  ];
+  if (matte.mode === "chroma") {
+    summaryCards.push(`
       <div class="summary-card">
         <span class="meta-label">\u8bc6\u522b\u5230\u7684\u80cc\u666f\u8272</span>
         <strong class="swatch-row">
@@ -958,8 +1119,9 @@ function renderJob() {
           <span>${escapeHtml(keyColor)}</span>
         </strong>
       </div>
-    `,
-  ].join("");
+    `);
+  }
+  els.jobSummary.innerHTML = summaryCards.join("");
   renderFrames();
   persistSession();
 }
@@ -1021,11 +1183,151 @@ function getSelectedFrames() {
   return state.job.frames.filter((frame) => state.selected.has(frame.index));
 }
 
+function getSegmentFrameRate(upload = state.upload) {
+  const fps = Number(currentUploadInfo(upload).fps || 0);
+  return Number.isFinite(fps) && fps > 0 ? fps : 0;
+}
+
+function getSegmentFrameStep(upload = state.upload) {
+  const fps = getSegmentFrameRate(upload);
+  return fps > 0 ? 1 / fps : 0.01;
+}
+
+function getSegmentFrameCount(upload = state.upload) {
+  if (isImageUpload(upload)) {
+    return 1;
+  }
+
+  const fps = getSegmentFrameRate(upload);
+  const duration = Math.max(Number(currentUploadInfo(upload).duration || 0), 0);
+  if (fps <= 0 || duration <= 0) {
+    return 1;
+  }
+  return Math.max(1, Math.round(duration * fps));
+}
+
+function clampSegmentFrame(frame, upload = state.upload) {
+  return clamp(Math.round(Number(frame || 1)), 1, getSegmentFrameCount(upload));
+}
+
+function syncSegmentFramesFromTimes(upload = state.upload) {
+  if (isImageUpload(upload)) {
+    state.segment.startFrame = 1;
+    state.segment.endFrame = 1;
+    return;
+  }
+
+  state.segment.startFrame = timeToSegmentFrame(state.segment.start, "start", upload);
+  state.segment.endFrame = timeToSegmentFrame(state.segment.end, "end", upload);
+}
+
+function syncSegmentTimesFromFrames(upload = state.upload) {
+  if (isImageUpload(upload)) {
+    state.segment.start = 0;
+    state.segment.end = 0;
+    state.segment.startFrame = 1;
+    state.segment.endFrame = 1;
+    return;
+  }
+
+  state.segment.startFrame = clampSegmentFrame(state.segment.startFrame, upload);
+  state.segment.endFrame = clampSegmentFrame(state.segment.endFrame, upload);
+  state.segment.start = segmentFrameToTime(state.segment.startFrame, "start", upload);
+  state.segment.end = segmentFrameToTime(state.segment.endFrame, "end", upload);
+}
+
+function timeToSegmentFrame(value, key, upload = state.upload) {
+  if (isImageUpload(upload)) {
+    return 1;
+  }
+
+  const step = getSegmentFrameStep(upload);
+  const snapped = snapSegmentTime(value, key === "start" ? "floor" : "ceil", upload);
+  const rawFrame = key === "start" ? Math.round(snapped / step) + 1 : Math.round(snapped / step);
+  return clampSegmentFrame(rawFrame, upload);
+}
+
+function segmentFrameToTime(frame, key, upload = state.upload) {
+  if (isImageUpload(upload)) {
+    return 0;
+  }
+
+  const clampedFrame = clampSegmentFrame(frame, upload);
+  const step = getSegmentFrameStep(upload);
+  const rawTime = key === "start" ? (clampedFrame - 1) * step : clampedFrame * step;
+  return snapSegmentTime(rawTime, key === "start" ? "floor" : "ceil", upload);
+}
+
+function getSegmentFrameValue(key, upload = state.upload) {
+  return timeToSegmentFrame(key === "start" ? state.segment.start : state.segment.end, key, upload);
+}
+
+function getSelectedSegmentFrameCount(upload = state.upload) {
+  if (isImageUpload(upload)) {
+    return 1;
+  }
+  const startFrame = getSegmentFrameValue("start", upload);
+  const endFrame = getSegmentFrameValue("end", upload);
+  return Math.max(1, endFrame - startFrame + 1);
+}
+
+function formatSegmentStep(upload = state.upload) {
+  return getSegmentFrameStep(upload).toFixed(8).replace(/0+$/u, "").replace(/\.$/u, "");
+}
+
+function snapSegmentTime(value, mode = "round", upload = state.upload) {
+  if (isImageUpload(upload)) {
+    return 0;
+  }
+
+  const duration = Math.max(Number(currentUploadInfo(upload).duration || 0), 0);
+  const step = Math.max(getSegmentFrameStep(upload), 1e-6);
+  const clampedValue = clamp(Number(value || 0), 0, duration);
+  const framePosition = clampedValue / step;
+
+  let frameIndex = Math.round(framePosition);
+  if (mode === "floor") {
+    frameIndex = Math.floor(framePosition + 1e-9);
+  } else if (mode === "ceil") {
+    frameIndex = Math.ceil(framePosition - 1e-9);
+  }
+
+  const snapped = clamp(frameIndex * step, 0, duration);
+  return Number(snapped.toFixed(8));
+}
+
 function normalizePreviewInterval() {
   const value = Number(els.previewIntervalInput.value || 100);
   const normalized = clamp(Math.round(value), 20, 5000);
   els.previewIntervalInput.value = String(normalized);
   return normalized;
+}
+
+function normalizeHexColor(value, fallback = "#F6FBF6") {
+  const raw = String(value || "").trim().toUpperCase();
+  if (/^#[0-9A-F]{6}$/.test(raw)) {
+    return raw;
+  }
+  return fallback;
+}
+
+function setPreviewStageBackground(color) {
+  const normalized = normalizeHexColor(color, state.preview.background);
+  const stage = els.animationPreviewCanvas?.closest(".animation-stage");
+  if (stage) {
+    stage.style.setProperty("--preview-bg-color", normalized);
+  }
+}
+
+function updatePreviewBackground(color, shouldPersist = false) {
+  const normalized = normalizeHexColor(color);
+  state.preview.background = normalized;
+  els.previewBackgroundInput.value = normalized;
+  els.previewBackgroundLabel.textContent = normalized;
+  setPreviewStageBackground(normalized);
+  if (shouldPersist) {
+    persistSession();
+  }
 }
 
 function resetPreviewState() {
@@ -1037,9 +1339,10 @@ function resetPreviewState() {
 }
 
 function stopPreviewTimer() {
-  if (state.preview.timerId !== null) {
-    window.clearInterval(state.preview.timerId);
-    state.preview.timerId = null;
+  state.preview.warmupToken += 1;
+  if (state.preview.rafId !== null) {
+    window.cancelAnimationFrame(state.preview.rafId);
+    state.preview.rafId = null;
   }
 }
 
@@ -1050,17 +1353,63 @@ function restartPreviewTimer() {
     updatePreviewControls(selectedFrames.length);
     return;
   }
-  const intervalMs = normalizePreviewInterval();
-  state.preview.timerId = window.setInterval(() => {
-    const frames = getSelectedFrames();
-    if (frames.length <= 1) {
-      stopPreviewTimer();
-      syncAnimationPreview(false);
+
+  const warmupToken = state.preview.warmupToken;
+  const startLoop = () => {
+    if (warmupToken !== state.preview.warmupToken || !state.preview.isPlaying) {
       return;
     }
-    state.preview.currentIndex = (state.preview.currentIndex + 1) % frames.length;
-    syncAnimationPreview(false);
-  }, intervalMs);
+
+    let lastAdvanceAt = performance.now();
+    const tick = (now) => {
+      if (warmupToken !== state.preview.warmupToken) {
+        return;
+      }
+
+      const frames = getSelectedFrames();
+      const frameCount = frames.length;
+      if (!state.preview.isPlaying || frameCount <= 1) {
+        stopPreviewTimer();
+        updatePreviewControls(frameCount);
+        return;
+      }
+
+      if (state.preview.currentIndex >= frameCount) {
+        state.preview.currentIndex = 0;
+        drawPreviewFrameFromCache(frames[0], frameCount);
+      }
+
+      const intervalMs = normalizePreviewInterval();
+      const elapsed = now - lastAdvanceAt;
+      if (elapsed >= intervalMs) {
+        const steps = Math.max(1, Math.floor(elapsed / intervalMs));
+        lastAdvanceAt += steps * intervalMs;
+        state.preview.currentIndex = (state.preview.currentIndex + steps) % frameCount;
+        drawPreviewFrameFromCache(frames[state.preview.currentIndex], frameCount);
+      }
+
+      state.preview.rafId = window.requestAnimationFrame(tick);
+    };
+
+    state.preview.rafId = window.requestAnimationFrame(tick);
+  };
+
+  if (selectedFrames.every((frame) => getCachedPreviewImage(frame.url))) {
+    startLoop();
+    updatePreviewControls(selectedFrames.length);
+    return;
+  }
+
+  warmPreviewFrames(selectedFrames)
+    .then(() => {
+      startLoop();
+    })
+    .catch((error) => {
+      if (warmupToken !== state.preview.warmupToken) {
+        return;
+      }
+      setStatus(error.message || String(error), "error");
+    });
   updatePreviewControls(selectedFrames.length);
 }
 
@@ -1082,15 +1431,20 @@ function togglePreviewPlayback() {
 function restartPreviewPlayback() {
   state.preview.currentIndex = 0;
   syncAnimationPreview();
-  restartPreviewTimer();
   persistSession();
 }
 
 function updatePreviewControls(selectedCount) {
   const hasFrames = selectedCount > 0;
   const canAnimate = selectedCount > 1;
+  const currentIndex = hasFrames ? Math.min(state.preview.currentIndex, selectedCount - 1) : 0;
+  const progressPercent = hasFrames ? ((currentIndex + 1) / selectedCount) * 100 : 0;
   els.previewPlayPauseButton.disabled = !canAnimate;
   els.previewRestartButton.disabled = !hasFrames;
+  els.previewProgressFill.style.width = `${progressPercent}%`;
+  els.previewProgressLabel.textContent = hasFrames
+    ? `${currentIndex + 1} / ${selectedCount}`
+    : "0 / 0";
   els.previewPlayPauseButton.textContent = canAnimate
     ? (state.preview.isPlaying ? "\u6682\u505c\u9884\u89c8" : "\u64ad\u653e\u9884\u89c8")
     : "\u5355\u5E27\u9884\u89C8";
@@ -1098,15 +1452,22 @@ function updatePreviewControls(selectedCount) {
 }
 
 async function loadPreviewImage(url) {
-  if (state.preview.imageCache.has(url)) {
-    return state.preview.imageCache.get(url);
+  const cached = state.preview.imageCache.get(url);
+  if (cached) {
+    return cached instanceof HTMLImageElement ? Promise.resolve(cached) : cached;
   }
 
   const promise = new Promise((resolve, reject) => {
     const image = new Image();
     image.decoding = "async";
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(`\u9884\u89c8\u5E27\u52A0\u8F7D\u5931\u8D25: ${url}`));
+    image.onload = () => {
+      state.preview.imageCache.set(url, image);
+      resolve(image);
+    };
+    image.onerror = () => {
+      state.preview.imageCache.delete(url);
+      reject(new Error(`\u9884\u89c8\u5E27\u52A0\u8F7D\u5931\u8D25: ${url}`));
+    };
     image.src = url;
   });
 
@@ -1114,12 +1475,44 @@ async function loadPreviewImage(url) {
   return promise;
 }
 
+function getCachedPreviewImage(url) {
+  const cached = state.preview.imageCache.get(url);
+  return cached instanceof HTMLImageElement ? cached : null;
+}
+
+function warmPreviewFrames(frames) {
+  return Promise.all(frames.map((frame) => loadPreviewImage(frame.url)));
+}
+
 function drawPreviewPlaceholder() {
   const canvas = els.animationPreviewCanvas;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = state.preview.background;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   els.previewEmptyState.hidden = false;
   els.previewFrameLabel.textContent = "\u5F53\u524D -";
+}
+
+function renderPreviewFrameImage(image, frame, selectedCount) {
+  const canvas = els.animationPreviewCanvas;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = state.preview.background;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = false;
+
+  const baseScale = Math.min(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight);
+  const scale = baseScale >= 1 ? Math.max(1, Math.floor(baseScale)) : baseScale;
+  const drawWidth = image.naturalWidth * scale;
+  const drawHeight = image.naturalHeight * scale;
+  const drawX = Math.round((canvas.width - drawWidth) / 2);
+  const drawY = Math.round((canvas.height - drawHeight) / 2);
+  ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+
+  els.previewEmptyState.hidden = true;
+  els.previewFrameLabel.textContent = `\u5F53\u524D #${String(frame.index + 1).padStart(3, "0")}`;
+  updatePreviewControls(selectedCount);
 }
 
 async function drawPreviewFrame(frame, selectedCount) {
@@ -1135,26 +1528,28 @@ async function drawPreviewFrame(frame, selectedCount) {
     if (token !== state.preview.renderToken) {
       return;
     }
-    const canvas = els.animationPreviewCanvas;
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.imageSmoothingEnabled = false;
-
-    const baseScale = Math.min(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight);
-    const scale = baseScale >= 1 ? Math.max(1, Math.floor(baseScale)) : baseScale;
-    const drawWidth = image.naturalWidth * scale;
-    const drawHeight = image.naturalHeight * scale;
-    const drawX = Math.round((canvas.width - drawWidth) / 2);
-    const drawY = Math.round((canvas.height - drawHeight) / 2);
-    ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
-
-    els.previewEmptyState.hidden = true;
-    els.previewFrameLabel.textContent = `\u5F53\u524D #${String(frame.index + 1).padStart(3, "0")}`;
-    updatePreviewControls(selectedCount);
+    renderPreviewFrameImage(image, frame, selectedCount);
   } catch (error) {
     drawPreviewPlaceholder();
     setStatus(error.message || String(error), "error");
   }
+}
+
+function drawPreviewFrameFromCache(frame, selectedCount) {
+  if (!frame) {
+    drawPreviewPlaceholder();
+    updatePreviewControls(selectedCount);
+    return;
+  }
+
+  state.preview.renderToken += 1;
+  const image = getCachedPreviewImage(frame.url);
+  if (!image) {
+    void drawPreviewFrame(frame, selectedCount);
+    return;
+  }
+
+  renderPreviewFrameImage(image, frame, selectedCount);
 }
 
 function syncAnimationPreview(shouldRestartTimer = true) {
@@ -1174,7 +1569,8 @@ function syncAnimationPreview(shouldRestartTimer = true) {
   }
 
   const currentFrame = selectedFrames[state.preview.currentIndex];
-  drawPreviewFrame(currentFrame, selectedCount);
+  drawPreviewFrameFromCache(currentFrame, selectedCount);
+  void warmPreviewFrames(selectedFrames);
   if (shouldRestartTimer) {
     restartPreviewTimer();
   }
@@ -1202,7 +1598,7 @@ async function exportFrames() {
     });
     state.exportResult = data.export;
     renderExportResult();
-    setStatus(`\u5bfc\u51fa\u5b8c\u6210\uff0c\u5df2\u5199\u5165 ${data.export.output_dir}\u3002`, "success");
+    setStatus("\u5bfc\u51fa\u5b8c\u6210\uff0c\u7ed3\u679c\u5df2\u5199\u5165\u672c\u5730\u5bfc\u51fa\u76ee\u5f55\u3002", "success");
   });
 }
 
@@ -1216,9 +1612,8 @@ function renderExportResult() {
   els.exportResult.hidden = false;
   els.exportResult.innerHTML = `
     <div class="result-summary">
-      ${summaryCard("\u5bfc\u51fa\u76ee\u5f55", escapeHtml(state.exportResult.output_dir))}
-      ${summaryCard("\u5355\u5e27\u76ee\u5f55", escapeHtml(state.exportResult.frames_dir))}
       ${summaryCard("\u5bfc\u51fa\u5e27\u6570", `${state.exportResult.frame_count} \u5e27`)}
+      ${summaryCard("\u5bfc\u51fa\u5185\u5bb9", "PNG \u5e27 / sprite sheet / zip / manifest")}
     </div>
     <div class="link-list">
       <button id="openExportDirButton" class="ghost-button" type="button">\u6253\u5f00\u5bfc\u51fa\u76ee\u5f55</button>
@@ -1268,11 +1663,27 @@ function formatFfmpegAccelLabel(ffmpegAccel) {
 }
 
 function updateChromaVisibility() {
-  const chromaEnabled = els.chromaEnabledInput.checked;
+  const matteMode = currentMatteMode();
+  const chromaEnabled = matteMode !== "none";
+  const isChroma = chromaEnabled && matteMode === "chroma";
+  const isAi = chromaEnabled && matteMode.startsWith("birefnet");
+  const isLuma = chromaEnabled && matteMode === "birefnet_luma";
+  const usesSpillControls = isChroma || isAi;
   const isManual = els.keyModeInput.value === "manual";
-  els.manualColorField.style.display = chromaEnabled && isManual ? "" : "none";
+  els.matteModeInput.disabled = !els.chromaEnabledInput.checked;
+  els.keyModeInput.closest(".field").style.display = usesSpillControls ? "" : "none";
+  els.manualColorField.style.display = usesSpillControls && isManual ? "" : "none";
   document.querySelectorAll(".chroma-only").forEach((node) => {
-    node.style.opacity = chromaEnabled ? "1" : "0.45";
+    node.style.display = isChroma ? "" : "none";
+  });
+  document.querySelectorAll(".spill-matte-only").forEach((node) => {
+    node.style.display = usesSpillControls ? "" : "none";
+  });
+  document.querySelectorAll(".ai-matte-only").forEach((node) => {
+    node.style.display = isAi ? "" : "none";
+  });
+  document.querySelectorAll(".luma-matte-only").forEach((node) => {
+    node.style.display = isLuma ? "" : "none";
   });
 }
 
