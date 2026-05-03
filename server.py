@@ -100,6 +100,7 @@ AI_MATTE_RESOLUTION_MULTIPLE = 32
 CORRIDORKEY_REPO_URL = "https://github.com/nikopueringer/CorridorKey"
 CORRIDORKEY_IMG_SIZE = 2048
 CORRIDORKEY_SCREEN_COLORS = {"auto", "green", "blue"}
+CANVAS_MODES = {"auto", "square_bottom", "square_center"}
 
 _FFMPEG_HWACCELS_CACHE: set[str] | None = None
 _BIREFNET_MODEL_CACHE: dict[tuple[str, str], object] = {}
@@ -288,6 +289,22 @@ def normalize_ai_device(raw: str) -> str:
 def normalize_corridorkey_screen(raw: str) -> str:
     value = str(raw or "auto").strip().lower()
     return value if value in CORRIDORKEY_SCREEN_COLORS else "auto"
+
+
+def normalize_canvas_mode(raw: str) -> str:
+    value = str(raw or "auto").strip().lower().replace("-", "_")
+    aliases = {
+        "": "auto",
+        "auto_width": "auto",
+        "auto_center": "auto",
+        "rect": "auto",
+        "rectangle": "auto",
+        "center": "square_center",
+        "square": "square_bottom",
+        "bottom": "square_bottom",
+    }
+    value = aliases.get(value, value)
+    return value if value in CANVAS_MODES else "auto"
 
 
 def resolve_corridorkey_screen(raw: str, key_rgb: tuple[int, int, int]) -> str:
@@ -1247,8 +1264,9 @@ def stable_resize_frames(
     keyed_frames: list[Image.Image],
     target_size: int,
     reduce_px: int,
+    canvas_mode: str = "auto",
     hard_alpha: bool = False,
-) -> tuple[list[Image.Image], list[tuple[int, int, int, int] | None], float]:
+) -> tuple[list[Image.Image], list[tuple[int, int, int, int] | None], float, tuple[int, int]]:
     bboxes = [frame.getchannel("A").getbbox() for frame in keyed_frames]
     valid_boxes = [box for box in bboxes if box is not None]
     if not valid_boxes:
@@ -1262,19 +1280,39 @@ def stable_resize_frames(
     )
     stable_width = stable_box[2] - stable_box[0]
     stable_height = stable_box[3] - stable_box[1]
-    inner_size = max(8, target_size - (reduce_px * 2))
-    scale = min(inner_size / max(stable_width, 1), inner_size / max(stable_height, 1))
+    canvas_mode = normalize_canvas_mode(canvas_mode)
+    canvas_height = max(8, target_size)
+    margin = max(0, min(reduce_px, max(0, (canvas_height - 8) // 2)))
 
-    resized_stable_size = (
-        max(1, round(stable_width * scale)),
-        max(1, round(stable_height * scale)),
-    )
-    paste_x = (target_size - resized_stable_size[0]) // 2
-    paste_y = target_size - reduce_px - resized_stable_size[1]
+    if canvas_mode == "auto":
+        inner_height = max(8, canvas_height - (margin * 2))
+        scale = inner_height / max(stable_height, 1)
+        resized_stable_size = (
+            max(1, round(stable_width * scale)),
+            max(1, round(stable_height * scale)),
+        )
+        canvas_width = max(8, resized_stable_size[0] + (margin * 2))
+        paste_x = (canvas_width - resized_stable_size[0]) // 2
+        paste_y = (canvas_height - resized_stable_size[1]) // 2
+    else:
+        inner_size = max(8, canvas_height - (margin * 2))
+        scale = min(inner_size / max(stable_width, 1), inner_size / max(stable_height, 1))
+        resized_stable_size = (
+            max(1, round(stable_width * scale)),
+            max(1, round(stable_height * scale)),
+        )
+        canvas_width = canvas_height
+        paste_x = (canvas_width - resized_stable_size[0]) // 2
+        if canvas_mode == "square_center":
+            paste_y = (canvas_height - resized_stable_size[1]) // 2
+        else:
+            paste_y = canvas_height - margin - resized_stable_size[1]
+
+    canvas_size = (canvas_width, canvas_height)
 
     rendered: list[Image.Image] = []
     for frame in keyed_frames:
-        canvas = Image.new("RGBA", (target_size, target_size), (0, 0, 0, 0))
+        canvas = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
         cropped = frame.crop(stable_box)
         resized = resize_rgba_with_premultiplied_alpha(
             cropped,
@@ -1287,7 +1325,7 @@ def stable_resize_frames(
             canvas = enforce_hard_alpha(canvas)
         rendered.append(canvas)
 
-    return rendered, bboxes, scale
+    return rendered, bboxes, scale, canvas_size
 
 
 def job_dir(job_id: str) -> Path:
@@ -1379,6 +1417,7 @@ def process_video_to_job(
     keep_every: int,
     target_size: int,
     reduce_px: int,
+    canvas_mode: str,
     chroma_enabled: bool,
     matte_mode: str,
     key_mode: str,
@@ -1446,10 +1485,11 @@ def process_video_to_job(
         corridorkey_screen=corridorkey_screen,
     )
 
-    rendered_frames, bboxes, scale = stable_resize_frames(
+    rendered_frames, bboxes, scale, canvas_size = stable_resize_frames(
         keyed_frames,
         target_size,
         reduce_px,
+        canvas_mode,
         hard_alpha=matte_info["mode"] == "chroma" and softness == 0 and not matte_info["corridorkey_enabled"],
     )
     frame_entries: list[dict] = []
@@ -1469,6 +1509,8 @@ def process_video_to_job(
                 "url": f"/work/jobs/{job_id}/processed/{frame_name}",
                 "thumb_url": f"/work/jobs/{job_id}/thumbs/{thumb_name}",
                 "bbox": list(bboxes[index]) if bboxes[index] else None,
+                "width": frame.size[0],
+                "height": frame.size[1],
             }
         )
 
@@ -1488,6 +1530,9 @@ def process_video_to_job(
             "keep_every": keep_every,
             "target_size": target_size,
             "reduce_px": reduce_px,
+            "canvas_mode": normalize_canvas_mode(canvas_mode),
+            "output_width": canvas_size[0],
+            "output_height": canvas_size[1],
             "chroma_enabled": chroma_enabled,
             "matte_mode": matte_info["mode"],
             "matte": matte_info,
@@ -1517,6 +1562,7 @@ def preview_frame(
     sample_time: float,
     target_size: int,
     reduce_px: int,
+    canvas_mode: str,
     chroma_enabled: bool,
     matte_mode: str,
     key_mode: str,
@@ -1581,10 +1627,11 @@ def preview_frame(
     )
     keyed_image = keyed_frames[0]
 
-    rendered_frames, _, scale = stable_resize_frames(
+    rendered_frames, _, scale, canvas_size = stable_resize_frames(
         [keyed_image],
         target_size,
         reduce_px,
+        canvas_mode,
         hard_alpha=matte_info["mode"] == "chroma" and softness == 0 and not matte_info["corridorkey_enabled"],
     )
     rendered_frames[0].save(processed_path)
@@ -1604,6 +1651,9 @@ def preview_frame(
         "options": {
             "target_size": target_size,
             "reduce_px": reduce_px,
+            "canvas_mode": normalize_canvas_mode(canvas_mode),
+            "output_width": canvas_size[0],
+            "output_height": canvas_size[1],
             "chroma_enabled": chroma_enabled,
             "matte_mode": matte_info["mode"],
             "key_mode": key_mode,
@@ -1757,6 +1807,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     keep_every=max(1, safe_int(payload.get("keep_every"), 1)),
                     target_size=max(32, safe_int(payload.get("target_size"), 256)),
                     reduce_px=max(0, safe_int(payload.get("reduce_px"), 20)),
+                    canvas_mode=normalize_canvas_mode(str(payload.get("canvas_mode") or "auto")),
                     chroma_enabled=bool(payload.get("chroma_enabled", True)),
                     matte_mode=str(payload.get("matte_mode") or ""),
                     key_mode=str(payload.get("key_mode") or "auto"),
@@ -1784,6 +1835,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     sample_time=safe_float(payload.get("sample_time"), 0.0),
                     target_size=max(32, safe_int(payload.get("target_size"), 256)),
                     reduce_px=max(0, safe_int(payload.get("reduce_px"), 20)),
+                    canvas_mode=normalize_canvas_mode(str(payload.get("canvas_mode") or "auto")),
                     chroma_enabled=bool(payload.get("chroma_enabled", True)),
                     matte_mode=str(payload.get("matte_mode") or ""),
                     key_mode=str(payload.get("key_mode") or "auto"),

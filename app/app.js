@@ -83,6 +83,7 @@ function bindElements() {
     "segmentConfirmHint",
     "keepEveryInput",
     "targetSizeInput",
+    "canvasModeInput",
     "reducePxInput",
     "chromaEnabledInput",
     "matteModeInput",
@@ -260,6 +261,7 @@ function bindEvents() {
   [
     els.keepEveryInput,
     els.targetSizeInput,
+    els.canvasModeInput,
     els.reducePxInput,
     els.chromaEnabledInput,
     els.keyModeInput,
@@ -394,6 +396,7 @@ function collectFormState() {
   return {
     keep_every: Number(els.keepEveryInput.value || 1),
     target_size: Number(els.targetSizeInput.value || 128),
+    canvas_mode: els.canvasModeInput.value,
     reduce_px: Number(els.reducePxInput.value || 0),
     chroma_enabled: els.chromaEnabledInput.checked,
     matte_mode: currentMatteMode(),
@@ -433,6 +436,7 @@ function collectProcessingPayload() {
     end_time: state.segment.end,
     keep_every: Number(els.keepEveryInput.value || 1),
     target_size: Number(els.targetSizeInput.value || 128),
+    canvas_mode: els.canvasModeInput.value,
     reduce_px: Number(els.reducePxInput.value || 0),
     chroma_enabled: els.chromaEnabledInput.checked,
     matte_mode: currentMatteMode(),
@@ -461,6 +465,9 @@ function applyFormState(snapshot) {
 
   if (snapshot.keep_every != null) els.keepEveryInput.value = String(snapshot.keep_every);
   if (snapshot.target_size != null) els.targetSizeInput.value = String(snapshot.target_size);
+  if (snapshot.canvas_mode && [...els.canvasModeInput.options].some((option) => option.value === snapshot.canvas_mode)) {
+    els.canvasModeInput.value = snapshot.canvas_mode;
+  }
   if (snapshot.reduce_px != null) els.reducePxInput.value = String(snapshot.reduce_px);
   if (snapshot.chroma_enabled != null) els.chromaEnabledInput.checked = Boolean(snapshot.chroma_enabled);
   if (snapshot.matte_mode && [...els.matteModeInput.options].some((option) => option.value === snapshot.matte_mode)) {
@@ -762,6 +769,12 @@ function formatMatteDetail(matte) {
     parts.push(`CorridorKey ${screen}${device}`);
   }
   return parts.join(" / ");
+}
+
+function formatCanvasModeLabel(value) {
+  if (value === "square_bottom") return "\u65B9\u5F62 / \u5E95\u90E8";
+  if (value === "square_center") return "\u65B9\u5F62 / \u5C45\u4E2D";
+  return "\u81EA\u52A8\u5BBD\u5EA6 / \u5C45\u4E2D";
 }
 
 async function importFromPath() {
@@ -1168,6 +1181,8 @@ function renderJob() {
   const matte = options.matte || { mode: options.matte_mode || (options.chroma_enabled ? "chroma" : "none") };
   const matteDetail = formatMatteDetail(matte);
   const sourceMediaType = state.job.source_media_type || uploadMediaType();
+  const outputWidth = options.output_width || options.target_size || "-";
+  const outputHeight = options.output_height || options.target_size || "-";
   const segmentLabel = sourceMediaType === "image"
     ? "\u5355\u5F20\u56FE\u7247\u8F93\u5165"
     : `${formatSeconds(options.start_time || 0)} - ${formatSeconds(options.end_time || 0)}`;
@@ -1178,7 +1193,8 @@ function renderJob() {
     summaryCard("\u8f93\u51fa\u5e27\u6570", `${state.job.frame_count} \u5e27`),
     summaryCard("\u53D6\u6837\u65B9\u5F0F", escapeHtml(formatSourceModeLabel(state.job.ffmpeg_accel, sourceMediaType))),
     summaryCard("\u62A0\u56FE\u6A21\u5F0F", escapeHtml(`${formatMatteModeLabel(matte)}${matteDetail ? ` / ${matteDetail}` : ""}`)),
-    summaryCard("\u76ee\u6807\u753b\u5e03", `${options.target_size || "-"} \u00d7 ${options.target_size || "-"}`),
+    summaryCard("\u8F93\u51FA\u753B\u5E03", `${outputWidth} \u00d7 ${outputHeight}`),
+    summaryCard("\u753B\u5E03\u5E03\u5C40", escapeHtml(formatCanvasModeLabel(options.canvas_mode))),
     summaryCard("\u62BD\u5E27\u95F4\u9694", sourceMediaType === "image" ? "\u5355\u5F20\u56FE\u7247" : `\u6BCF ${options.keep_every || 1} \u5E27\u4FDD\u7559\u4E00\u5F20`),
     summaryCard("\u8F93\u5165\u533A\u95F4", segmentLabel),
   ];

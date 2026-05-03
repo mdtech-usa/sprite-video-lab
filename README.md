@@ -9,7 +9,7 @@ It is designed for workflows like:
 - extract frames at a fixed cadence
 - remove solid-color backgrounds or AI-generated backgrounds
 - keep animated glow/VFX with a luminance matte
-- normalize frame size and ground alignment
+- normalize frame size with automatic rectangular canvases or square ground alignment
 - export transparent PNG frames, a sprite sheet, a manifest, and a zip package
 
 The project is Windows-first, but the server and app are intentionally lightweight: Python, Pillow, ffmpeg, and vanilla HTML/CSS/JavaScript.
@@ -19,6 +19,7 @@ The project is Windows-first, but the server and app are intentionally lightweig
 - Local path import and drag-and-drop upload
 - Video range preview with frame-accurate start/end controls
 - Single-frame parameter preview before processing a full segment
+- Automatic-width centered canvas mode for wide strips, attacks, VFX, and multi-pose rows
 - Chroma key background removal with threshold, softness, despill, and halo controls
 - Optional BiRefNet AI matting for subject alpha
 - Optional BiRefNet + Luma mode for preserving glow, fire, lightning, particles, and other bright VFX
