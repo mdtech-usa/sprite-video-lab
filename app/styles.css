@@ -898,6 +898,34 @@ button:disabled {
   width: 140px;
 }
 
+.process-preview-background-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.process-preview-background-controls select {
+  width: auto;
+  min-height: 38px;
+  padding: 8px 34px 8px 12px;
+  border-radius: 14px;
+}
+
+.process-preview-background-controls .color-row {
+  gap: 8px;
+}
+
+.process-preview-background-controls input[type="color"] {
+  width: 38px;
+  height: 38px;
+}
+
+.process-preview-background-controls code {
+  min-width: 82px;
+  padding: 8px 10px;
+}
+
 .preset-button-row {
   display: flex;
   flex-wrap: wrap;
@@ -947,6 +975,10 @@ button:disabled {
     linear-gradient(160deg, rgba(255, 250, 244, 0.98), rgba(246, 251, 246, 0.92));
   background-position: 0 0, 12px 12px, 0 0;
   background-size: 24px 24px, 24px 24px, auto;
+}
+
+.solid-preview-stage {
+  background: var(--process-preview-bg-color, #f6fbf6);
 }
 
 .image-preview-stage img {
@@ -1042,11 +1074,20 @@ button:disabled {
 }
 
 .selection-actions,
+.custom-animation-actions,
 .selection-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+}
+
+.custom-animation-actions {
+  margin-left: auto;
+}
+
+.selection-meta {
+  margin-left: 0;
 }
 
 .result-workbench {

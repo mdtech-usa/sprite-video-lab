@@ -3,8 +3,11 @@
 Sprite Video Lab can optionally use BiRefNet and CorridorKey for AI background removal:
 
 - `BiRefNet`: subject alpha from the model.
+- `Luma`: brightness-derived alpha for glow, fire, lightning, particles, and bright-on-dark VFX.
 - `BiRefNet + Luma`: subject alpha plus brightness alpha for glow, fire, lightning, particles, and other VFX.
-- `CorridorKey refinement`: uses the current chroma/BiRefNet alpha as a coarse hint, then reconstructs foreground color and a refined alpha for green or blue screen plates.
+- `CorridorKey`: uses the green-screen key alpha as a coarse hint, then reconstructs foreground color and a refined alpha for green or blue screen plates.
+- `BiRefNet + CorridorKey`: uses the BiRefNet alpha as the coarse hint for CorridorKey.
+- `BiRefNet + Luma + CorridorKey`: combines subject alpha and brightness alpha first, then uses that combined alpha as the CorridorKey hint.
 
 The app keeps the chroma-key workflow. AI matting is only used when you select it in step 3.
 

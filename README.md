@@ -1,71 +1,77 @@
 # Sprite Video Lab
 
-Sprite Video Lab is a local web tool for turning video clips or still images into clean 2D sprite assets.
+Sprite Video Lab 是一个本地网页工具，用来把视频片段、单张图片或已有序列帧整理成干净的 2D Sprite 资源。
 
-It is designed for workflows like:
+它适合这些工作流：
 
-- import a local video or image
-- trim the useful frame range
-- extract frames at a fixed cadence
-- remove solid-color backgrounds or AI-generated backgrounds
-- keep animated glow/VFX with a luminance matte
-- normalize frame size with automatic rectangular canvases or square ground alignment
-- export transparent PNG frames, a sprite sheet, a manifest, and a zip package
+- 导入本地视频、图片或动画序列帧。
+- 截取有用的帧范围。
+- 按固定间隔抽帧。
+- 去除纯色背景、绿幕/蓝幕背景或 AI 生成背景。
+- 用 Luma 保留发光、火焰、闪电、粒子等亮部特效。
+- 统一帧尺寸，支持自动宽度画布或方形落地/居中画布。
+- 导出透明 PNG 帧、Sprite Sheet、JSON manifest 和 zip 包。
 
-The project is Windows-first, but the server and app are intentionally lightweight: Python, Pillow, ffmpeg, and vanilla HTML/CSS/JavaScript.
+项目优先服务 Windows 本地工作流，但运行时很轻：Python、Pillow、ffmpeg，以及原生 HTML/CSS/JavaScript。
 
-## Features
+## 功能
 
-- Local path import and drag-and-drop upload
-- Video range preview with frame-accurate start/end controls
-- Single-frame parameter preview before processing a full segment
-- Automatic-width centered canvas mode for wide strips, attacks, VFX, and multi-pose rows
-- Chroma key background removal with threshold, softness, despill, and halo controls
-- Optional BiRefNet AI matting for subject alpha
-- Optional BiRefNet + Luma mode for preserving glow, fire, lightning, particles, and other bright VFX
-- Luma subject-protection presets for keeping buildings, characters, and props from becoming semi-transparent
-- Optional CorridorKey refinement for green/blue screen foreground unmixing and cleaner semi-transparent edges
-- AI edge cleanup controls for spill and dirty halos
-- Preview and batch post-processing for green residue and semi-transparent edge pixels
-- Reverse animation preview and reverse-order export
-- Batch frame selection, animation preview, sprite sheet export, zip export, and JSON manifest export
+- 本地路径导入和拖拽上传。
+- 视频区间预览，支持按帧设置起止位置。
+- 批处理前先单帧预览参数效果。
+- 自动宽度居中画布，适合横向连招、特效条、多姿态行。
+- 纯色/绿幕抠图，支持阈值、软边、去色溢出和 Halo 收缩。
+- BiRefNet AI 主体抠图。
+- Luma 亮度抠图，用来保留发光、火焰、闪电、粒子和亮部 VFX。
+- CorridorKey 绿幕/蓝幕边缘精修和前景颜色重建。
+- `BiRefNet + Luma + CorridorKey` 三管齐下模式。
+- 主体保护预设，减少 BiRefNet/Luma 把主体内部抠成半透明的问题。
+- 单帧预览支持原始抽帧全分辨率查看，处理后预览可切换棋盘格或指定纯色背景。
+- 预览和批处理后处理：残绿涂黑、半透明像素涂黑。
+- 可直接导入已有动画序列帧，按文件名顺序预览和导出。
+- 反向动画预览和反向导出。
+- 帧选择、动画预览、Sprite Sheet 导出、zip 导出和 JSON manifest 导出。
 
-## Matting Modes
+## 抠图模式
 
-Sprite Video Lab includes four base processing modes:
+Sprite Video Lab 目前提供这些背景处理模式：
 
-- `Solid color / green screen`: fast chroma-key removal for controlled backgrounds.
-- `BiRefNet`: AI subject matting for non-uniform or generated backgrounds.
-- `BiRefNet + Luma`: combines the BiRefNet alpha with a brightness-derived alpha, useful for VFX-heavy sprites.
-- `No matting`: only normalize, align, and export frames.
+- `我的绿幕抠图算法`：快速处理受控纯色背景，适合绿幕、蓝幕、白底、灰底等素材。
+- `只用 BiRefNet`：AI 主体抠图，适合非纯色背景或生成图背景。
+- `只用 CorridorKey`：先用绿幕算法生成粗 alpha，再用 CorridorKey 重建边缘和前景颜色。
+- `只用 Luma`：基于亮度生成 alpha，适合亮部特效、火焰、闪电、粒子等素材。
+- `BiRefNet + CorridorKey`：BiRefNet 先给主体 alpha，再用 CorridorKey 做绿幕/蓝幕边缘重建。
+- `BiRefNet + Luma`：主体 alpha 加亮度 alpha，适合 VFX 比较重的 Sprite。
+- `BiRefNet + Luma + CorridorKey`：先合成主体 alpha 和亮度 alpha，再用 CorridorKey 做边缘/颜色重建。
+- `不抠图`：素材已经带透明通道时，只做缩放、对齐和导出。
 
-For green or blue screen sources, enable `CorridorKey refinement` to use the current chroma/BiRefNet alpha as a coarse hint and reconstruct cleaner foreground color plus alpha. For smaller edge fixes, use manual background color selection, increase despill strength, and try a 1-2 px halo shrink.
+灰底、白底、黑底素材通常不需要去色溢出；绿幕/蓝幕素材再开启 despill 和 CorridorKey 会更稳。
 
-## Requirements
+## 环境要求
 
 - Python 3.10+
 - Pillow
 - ffmpeg / ffprobe
-- Optional AI runtime:
+- 可选 AI 环境：
   - PyTorch
   - torchvision
   - transformers
   - huggingface-hub
-  - timm and supporting image libraries
-  - CorridorKey dependencies (`safetensors`, OpenCV, NumPy)
+  - timm 和相关图片依赖
+  - CorridorKey 依赖，例如 `safetensors`、OpenCV、NumPy
 
-The base app only needs `requirements.txt`. AI matting uses `requirements-ai.txt`.
+基础功能只需要 `requirements.txt`。BiRefNet、Luma 组合和 CorridorKey 相关能力需要 `requirements-ai.txt` 里的可选依赖。
 
-## Quick Start
+## 快速开始
 
-### 1. Clone
+### 1. 克隆项目
 
 ```bash
 git clone https://github.com/sparklecatta-lang/sprite-video-lab.git
 cd sprite-video-lab
 ```
 
-### 2. Install base dependencies
+### 2. 安装基础依赖
 
 ```bash
 python -m venv .venv
@@ -73,112 +79,118 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 3. Install ffmpeg
+### 3. 安装 ffmpeg
 
-Put `ffmpeg` and `ffprobe` on `PATH`.
+把 `ffmpeg` 和 `ffprobe` 放到 `PATH`。
 
-If you keep a standalone ffmpeg directory, you can point the app to it:
+如果你使用独立 ffmpeg 目录，可以这样指定：
 
 ```powershell
 $env:SPRITE_VIDEO_LAB_FFMPEG_DIR="D:\ffmpeg\bin"
 ```
 
-### 4. Optional: install AI matting runtime
+### 4. 可选：安装 AI 抠图环境
 
-On Windows, run:
+Windows 下运行：
 
 ```bat
 setup_ai_runtime.bat
 ```
 
-This creates a separate AI Python environment and installs the dependencies needed for BiRefNet and CorridorKey. Model cache location can be overridden with:
+脚本会创建单独的 AI Python 环境，并安装 BiRefNet 和 CorridorKey 所需依赖。模型缓存目录可以这样覆盖：
 
 ```bat
 set SPRITE_VIDEO_LAB_AI_MODEL_CACHE=<model-cache-dir>
 ```
 
-CorridorKey source and checkpoints can be overridden with:
+CorridorKey 源码和 checkpoint 目录可以这样覆盖：
 
 ```bat
 set SPRITE_VIDEO_LAB_CORRIDORKEY_ROOT=<corridorkey-dir>
 ```
 
-You can also point the server to a custom Python runtime:
+也可以指定服务启动时使用的 Python：
 
 ```bat
 set SPRITE_VIDEO_LAB_PYTHON=<python-runtime>
 ```
 
-See [AI_MATTING.md](./AI_MATTING.md) for details.
+更多说明见 [AI_MATTING.md](./AI_MATTING.md)。
 
-## Usage Guide
+### 5. 启动
 
-For complete walkthroughs of import, trimming, matting modes, Luma subject-protection presets, CorridorKey refinement, post-processing, animation preview, reverse export, and troubleshooting, see:
-
-- [English usage guide](./USAGE.md)
-- [中文使用说明](./USAGE.zh-CN.md)
-
-### 5. Start
-
-On Windows:
+Windows 下直接运行：
 
 ```bat
 start_sprite_video_lab.bat
 ```
 
-Or from a terminal:
+或在终端运行：
 
 ```bash
 python server.py
 ```
 
-Default URL:
+默认地址：
 
 ```text
 http://127.0.0.1:8894
 ```
 
-## Environment Variables
+## 使用说明
+
+完整的导入、截取、抠图模式、Luma 主体保护、CorridorKey 精修、后处理、动画预览、反向导出和排错说明见：
+
+- [中文使用说明](./USAGE.zh-CN.md)
+- [English usage guide](./USAGE.md)
+
+## 环境变量
 
 - `SPRITE_VIDEO_LAB_HOST`
-  - default: `127.0.0.1`
+  - 默认：`127.0.0.1`
 - `SPRITE_VIDEO_LAB_PORT`
-  - default: `8894`
+  - 默认：`8894`
 - `SPRITE_VIDEO_LAB_FFMPEG_DIR`
-  - optional directory containing `ffmpeg(.exe)` and `ffprobe(.exe)`
+  - 可选，包含 `ffmpeg(.exe)` 和 `ffprobe(.exe)` 的目录
 - `SPRITE_VIDEO_LAB_FFMPEG_ACCEL`
-  - optional, supports `auto`, `cpu`, `cuda`, `qsv`, `d3d11va`, `dxva2`
+  - 可选，支持 `auto`、`cpu`、`cuda`、`qsv`、`d3d11va`、`dxva2`
 - `SPRITE_VIDEO_LAB_AI_MODEL_CACHE`
-  - optional Hugging Face / model cache directory for AI matting
+  - 可选，Hugging Face / AI 模型缓存目录
 - `SPRITE_VIDEO_LAB_CORRIDORKEY_ROOT`
-  - optional CorridorKey checkout and checkpoint directory
+  - 可选，CorridorKey checkout 和 checkpoint 目录
 - `SPRITE_VIDEO_LAB_PYTHON`
-  - optional Python executable used by the launcher
+  - 可选，启动器使用的 Python 可执行文件
 
-You can override host and port from the command line:
+也可以从命令行覆盖 host 和 port：
 
 ```bash
 python server.py --host 127.0.0.1 --port 8894
 ```
 
-## Project Layout
+## 项目结构
 
 ```text
-app/                         Frontend UI and browser logic
-server.py                    Local HTTP server and processing pipeline
-requirements.txt             Base runtime dependencies
-requirements-ai.txt          Optional AI matting dependencies
-setup_ai_runtime.bat         Windows helper for optional AI runtime
-start_sprite_video_lab.bat   Windows launcher
-work/                        Runtime outputs, ignored by git
+app/                              前端 UI 和浏览器逻辑
+server.py                         本地 HTTP 服务和处理流水线
+requirements.txt                  基础运行依赖
+requirements-ai.txt               可选 AI 抠图依赖
+setup_ai_runtime.bat              Windows AI 环境安装脚本
+start_sprite_video_lab.bat        Windows 启动器
+start_sprite_video_lab_portable.bat 便携版启动器
+build_portable_bundle.ps1         便携版打包脚本
+work/                             运行时输出目录，已被 git 忽略
 ```
 
-## Notes
+## 注意事项
 
-- Keep `work/`, generated frames, test videos, model caches, and virtual environments out of git.
-- AI models are downloaded by the local runtime when selected for the first time.
-- BiRefNet uses remote model code from Hugging Face via `trust_remote_code=True`; review/pin model revisions if you need stricter supply-chain control.
-- CorridorKey is integrated as an optional local refinement engine. Review CorridorKey's license before commercial redistribution or paid inference use.
+- 不要把 `work/`、生成帧、测试视频、模型缓存和虚拟环境提交到 git。
+- AI 模型会在第一次选择相关模式时由本地运行时下载。
+- BiRefNet 通过 Hugging Face 的 `trust_remote_code=True` 加载远程模型代码；如果需要更严格的供应链控制，请审查并固定模型 revision。
+- CorridorKey 是独立项目，重新分发或用于商业推理服务前请确认它的许可证。
+
+## English
+
+This README is Chinese-first. For English instructions, see [USAGE.md](./USAGE.md).
 
 ## License
 

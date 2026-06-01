@@ -19,6 +19,10 @@ const state = {
     source: 100,
     processed: 100,
   },
+  processPreviewBackground: {
+    mode: "checkerboard",
+    color: "#F6FBF6",
+  },
   processPreviewPan: {
     source: { x: 0, y: 0 },
     processed: { x: 0, y: 0 },
@@ -43,6 +47,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindElements();
   bindEvents();
   updatePreviewBackground(state.preview.background, false);
+  updateProcessPreviewBackground(state.processPreviewBackground.mode, state.processPreviewBackground.color, false);
   syncManualColorLabel();
   updateChromaVisibility();
   normalizePreviewInterval();
@@ -50,6 +55,7 @@ document.addEventListener("DOMContentLoaded", () => {
   drawPreviewPlaceholder();
   resetProcessPreview();
   updateSegmentConfirmationUI();
+  showAnimationWorkbench();
   setStatus("\u7B49\u5F85\u5BFC\u5165\u7D20\u6750\u3002");
   restoreSessionFromStorage();
   normalizeAiResolutionInput(false);
@@ -127,6 +133,11 @@ function bindElements() {
     "previewSourceZoomInButton",
     "previewProcessedImage",
     "previewProcessedEmpty",
+    "previewProcessedStage",
+    "processPreviewBackgroundModeInput",
+    "processPreviewBackgroundInput",
+    "processPreviewBackgroundLabel",
+    "processPreviewBackgroundColorRow",
     "previewProcessedZoomInput",
     "previewProcessedZoomLabel",
     "previewProcessedZoomOutButton",
@@ -137,6 +148,11 @@ function bindElements() {
     "processButton",
     "jobSummary",
     "selectionCount",
+    "customAnimationInput",
+    "customAnimationFolderInput",
+    "clearPreviewFramesButton",
+    "importAnimationButton",
+    "importAnimationFolderButton",
     "openProcessedButton",
     "animationPreviewCanvas",
     "previewEmptyState",
@@ -232,6 +248,7 @@ function bindEvents() {
     refreshCardSelection(index, target.checked);
     renderSelectionCount();
     syncAnimationPreview();
+    syncResultActions();
     persistSession();
   });
 
@@ -255,6 +272,17 @@ function bindEvents() {
     state.preview.currentIndex = 0;
     renderFrames();
   });
+  els.clearPreviewFramesButton.addEventListener("click", clearPreviewFrames);
+  els.importAnimationButton.addEventListener("click", () => els.customAnimationInput.click());
+  els.importAnimationFolderButton.addEventListener("click", () => els.customAnimationFolderInput.click());
+  els.customAnimationInput.addEventListener("change", async () => {
+    await importCustomAnimationFrames(Array.from(els.customAnimationInput.files || []), els.importAnimationButton);
+    els.customAnimationInput.value = "";
+  });
+  els.customAnimationFolderInput.addEventListener("change", async () => {
+    await importCustomAnimationFrames(Array.from(els.customAnimationFolderInput.files || []), els.importAnimationFolderButton);
+    els.customAnimationFolderInput.value = "";
+  });
 
   els.openProcessedButton.addEventListener("click", async () => {
     if (state.job?.processed_dir) {
@@ -273,6 +301,16 @@ function bindEvents() {
   els.previewBackgroundInput.addEventListener("input", () => {
     updatePreviewBackground(els.previewBackgroundInput.value, true);
     syncAnimationPreview(false);
+  });
+  els.processPreviewBackgroundModeInput.addEventListener("change", () => {
+    updateProcessPreviewBackground(
+      els.processPreviewBackgroundModeInput.value,
+      state.processPreviewBackground.color,
+      true
+    );
+  });
+  els.processPreviewBackgroundInput.addEventListener("input", () => {
+    updateProcessPreviewBackground("color", els.processPreviewBackgroundInput.value, true);
   });
   els.previewIntervalInput.addEventListener("change", () => {
     normalizePreviewInterval();
@@ -543,8 +581,29 @@ function currentMatteMode() {
   return els.matteModeInput.value || "chroma";
 }
 
+function matteModeUsesBiRefNet(mode) {
+  return (
+    mode === "birefnet" ||
+    mode === "birefnet_corridorkey" ||
+    mode === "birefnet_luma" ||
+    mode === "birefnet_luma_corridorkey"
+  );
+}
+
+function matteModeUsesCorridorKey(mode) {
+  return mode === "corridorkey" || mode === "birefnet_corridorkey" || mode === "birefnet_luma_corridorkey";
+}
+
+function matteModeUsesLuma(mode) {
+  return mode === "luma" || mode === "birefnet_luma" || mode === "birefnet_luma_corridorkey";
+}
+
+function matteModeUsesChromaSeed(mode) {
+  return mode === "chroma" || mode === "corridorkey";
+}
+
 function currentUsesCorridorKey() {
-  return currentMatteMode() !== "none" && els.corridorEnabledInput.checked;
+  return matteModeUsesCorridorKey(currentMatteMode());
 }
 
 function normalizeAiResolution(value) {
@@ -622,7 +681,7 @@ function collectFormState() {
     softness: Number(els.softnessInput.value === "" ? 1 : els.softnessInput.value),
     despill_strength: Number(els.despillInput.value || 0),
     halo_pixels: Number(els.haloInput.value || 0),
-    corridorkey_enabled: els.corridorEnabledInput.checked,
+    corridorkey_enabled: currentUsesCorridorKey(),
     corridorkey_screen: els.corridorScreenInput.value,
     ai_model: els.aiModelInput.value,
     ai_device: els.aiDeviceInput.value,
@@ -639,6 +698,10 @@ function collectFormState() {
     process_preview_zoom: {
       source: state.processPreviewZoom.source,
       processed: state.processPreviewZoom.processed,
+    },
+    process_preview_background: {
+      mode: state.processPreviewBackground.mode,
+      color: state.processPreviewBackground.color,
     },
     segment: {
       start: Number(state.segment.start || 0),
@@ -665,7 +728,7 @@ function collectProcessingPayload() {
     softness: Number(els.softnessInput.value === "" ? 1 : els.softnessInput.value),
     despill_strength: Number(els.despillInput.value || 0),
     halo_pixels: Number(els.haloInput.value || 0),
-    corridorkey_enabled: els.corridorEnabledInput.checked,
+    corridorkey_enabled: currentUsesCorridorKey(),
     corridorkey_screen: els.corridorScreenInput.value,
     ai_model: els.aiModelInput.value,
     ai_device: els.aiDeviceInput.value,
@@ -694,13 +757,22 @@ function applyFormState(snapshot) {
   if (snapshot.matte_mode && [...els.matteModeInput.options].some((option) => option.value === snapshot.matte_mode)) {
     els.matteModeInput.value = snapshot.matte_mode;
   }
+  if (snapshot.corridorkey_enabled && !matteModeUsesCorridorKey(els.matteModeInput.value)) {
+    if (els.matteModeInput.value === "birefnet") {
+      els.matteModeInput.value = "birefnet_corridorkey";
+    } else if (els.matteModeInput.value === "birefnet_luma") {
+      els.matteModeInput.value = "birefnet_luma_corridorkey";
+    } else if (els.matteModeInput.value === "chroma") {
+      els.matteModeInput.value = "corridorkey";
+    }
+  }
   if (snapshot.key_mode) els.keyModeInput.value = snapshot.key_mode;
   if (snapshot.manual_key_hex) els.manualKeyInput.value = snapshot.manual_key_hex;
   if (snapshot.threshold != null) els.thresholdInput.value = String(snapshot.threshold);
   if (snapshot.softness != null) els.softnessInput.value = String(snapshot.softness);
   if (snapshot.despill_strength != null) els.despillInput.value = String(snapshot.despill_strength);
   if (snapshot.halo_pixels != null) els.haloInput.value = String(snapshot.halo_pixels);
-  if (snapshot.corridorkey_enabled != null) els.corridorEnabledInput.checked = Boolean(snapshot.corridorkey_enabled);
+  els.corridorEnabledInput.checked = currentUsesCorridorKey();
   if (
     snapshot.corridorkey_screen &&
     [...els.corridorScreenInput.options].some((option) => option.value === snapshot.corridorkey_screen)
@@ -734,6 +806,15 @@ function applyFormState(snapshot) {
   } else {
     updateProcessPreviewZoom("source", 100, false);
     updateProcessPreviewZoom("processed", 100, false);
+  }
+  if (snapshot.process_preview_background) {
+    updateProcessPreviewBackground(
+      snapshot.process_preview_background.mode,
+      snapshot.process_preview_background.color,
+      false
+    );
+  } else {
+    updateProcessPreviewBackground("checkerboard", state.processPreviewBackground.color, false);
   }
 
   if (snapshot.segment) {
@@ -783,7 +864,11 @@ function restoreSessionFromStorage() {
     return;
   }
 
-  if (!snapshot || !snapshot.upload) {
+  if (!snapshot) {
+    return;
+  }
+
+  if (!snapshot.upload && !snapshot.job?.frames) {
     if (snapshot?.form) {
       applyFormState(snapshot.form);
       updateSegmentConfirmationUI();
@@ -791,7 +876,17 @@ function restoreSessionFromStorage() {
     return;
   }
 
-  applyUpload(snapshot.upload);
+  if (snapshot.upload) {
+    applyUpload(snapshot.upload);
+  } else {
+    resetPreviewState();
+    state.upload = null;
+    state.processPreview = null;
+    els.previewPanel.hidden = true;
+    els.processPanel.hidden = true;
+    resetProcessPreview();
+    updateSegmentConfirmationUI();
+  }
   applyFormState(snapshot.form);
   if (state.upload) {
     normalizeSegment("end");
@@ -958,8 +1053,20 @@ function isSupportedUploadFile(file) {
   return SUPPORTED_UPLOAD_EXTENSIONS.some((ext) => name.endsWith(ext));
 }
 
+function isSupportedImageFile(file) {
+  if (!file || !file.name) {
+    return false;
+  }
+  const name = String(file.name).toLowerCase();
+  return SUPPORTED_IMAGE_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
+
 function formatSourceModeLabel(ffmpegAccel, sourceMediaType = uploadMediaType()) {
-  if (String(sourceMediaType || "video").toLowerCase() === "image") {
+  const type = String(sourceMediaType || "video").toLowerCase();
+  if (type === "animation") {
+    return "\u81EA\u5B9A\u4E49\u52A8\u753B";
+  }
+  if (type === "image") {
     return "\u9759\u6001\u56FE\u7247";
   }
   return `FFmpeg ${formatFfmpegAccelLabel(ffmpegAccel)}`;
@@ -970,8 +1077,17 @@ function formatMatteModeLabel(matte) {
   let label = "\u7EAF\u8272\u62A0\u56FE";
   if (mode === "none") label = "\u4E0D\u62A0\u56FE";
   if (mode === "birefnet") label = "BiRefNet";
+  if (mode === "corridorkey") label = "CorridorKey";
+  if (mode === "luma") label = "Luma";
+  if (mode === "birefnet_corridorkey") label = "BiRefNet + CorridorKey";
   if (mode === "birefnet_luma") label = "BiRefNet + Luma";
-  if (mode !== "none" && typeof matte !== "string" && matte?.corridorkey_enabled) {
+  if (mode === "birefnet_luma_corridorkey") label = "BiRefNet + Luma + CorridorKey";
+  if (
+    mode !== "none" &&
+    !matteModeUsesCorridorKey(mode) &&
+    typeof matte !== "string" &&
+    matte?.corridorkey_enabled
+  ) {
     label = `${label} + CorridorKey`;
   }
   return label;
@@ -991,8 +1107,11 @@ function formatMatteDetail(matte) {
     return "";
   }
   const parts = [];
-  if (matte.mode !== "chroma") {
-    parts.push(matte.model_label || formatMatteModeLabel(matte));
+  if (matteModeUsesBiRefNet(matte.mode) && matte.model_label) {
+    parts.push(matte.model_label);
+  }
+  if (matteModeUsesLuma(matte.mode) && matte.luma_enabled) {
+    parts.push(`Luma ${matte.luma_black}-${matte.luma_white}`);
   }
   if (matte.resolution) {
     parts.push(`${matte.resolution}px`);
@@ -1006,6 +1125,7 @@ function formatMatteDetail(matte) {
 }
 
 function formatCanvasModeLabel(value) {
+  if (value === "custom") return "\u539F\u59CB\u5E27\u5C3A\u5BF8";
   if (value === "square_bottom") return "\u65B9\u5F62 / \u5E95\u90E8";
   if (value === "square_center") return "\u65B9\u5F62 / \u5C45\u4E2D";
   return "\u81EA\u52A8\u5BBD\u5EA6 / \u5C45\u4E2D";
@@ -1070,6 +1190,94 @@ async function uploadSelectedFile(file) {
   });
 }
 
+function sortFilesByDisplayName(files) {
+  return [...files].sort((a, b) => {
+    const aName = a.webkitRelativePath || a.name || "";
+    const bName = b.webkitRelativePath || b.name || "";
+    return aName.localeCompare(bName, undefined, { numeric: true, sensitivity: "base" });
+  });
+}
+
+async function importCustomAnimationFrames(files, button) {
+  const imageFiles = sortFilesByDisplayName(files).filter(isSupportedImageFile);
+  if (imageFiles.length === 0) {
+    setStatus("\u8BF7\u9009\u62E9 PNG / JPG / WebP / BMP \u5E8F\u5217\u5E27\u3002", "error");
+    return;
+  }
+
+  const form = new FormData();
+  imageFiles.forEach((file) => {
+    form.append("frames", file, file.webkitRelativePath || file.name);
+  });
+
+  await withBusy(button, async () => {
+    stopPreviewTimer();
+    setStatus(`\u6B63\u5728\u6309\u6587\u4EF6\u540D\u5BFC\u5165 ${imageFiles.length} \u5E27...`);
+    const data = await apiJson("/api/import-animation", {
+      method: "POST",
+      body: form,
+    });
+
+    state.upload = null;
+    state.processPreview = null;
+    state.job = data.job;
+    state.exportResult = null;
+    state.selected = new Set(data.job.frames.map((frame) => frame.index));
+    state.preview.currentIndex = 0;
+    state.preview.isPlaying = true;
+    els.previewReverseInput.checked = state.preview.isReversed;
+    els.previewPanel.hidden = true;
+    els.processPanel.hidden = true;
+    resetProcessPreview();
+    updateSegmentConfirmationUI();
+    renderJob();
+    setStatus(`\u5DF2\u6309\u6587\u4EF6\u540D\u987A\u5E8F\u5BFC\u5165 ${data.job.frame_count} \u5E27\u3002`, "success");
+  });
+}
+
+function clearPreviewFrames() {
+  stopPreviewTimer();
+  resetPreviewState();
+  state.job = null;
+  state.exportResult = null;
+  state.selected = new Set();
+  els.jobSummary.innerHTML = "";
+  els.frameGrid.innerHTML = "";
+  els.exportResult.hidden = true;
+  els.exportResult.innerHTML = "";
+  showAnimationWorkbench();
+  renderSelectionCount();
+  drawPreviewPlaceholder();
+  updatePreviewControls(0);
+  persistSession();
+  setStatus("\u5DF2\u6E05\u7A7A\u53C2\u4E0E\u52A8\u753B\u9884\u89C8\u7684\u5E27\u3002", "success");
+}
+
+function showAnimationWorkbench() {
+  els.resultPanel.hidden = false;
+  if (!state.job) {
+    els.jobSummary.innerHTML = "";
+    els.frameGrid.innerHTML = "";
+    els.exportResult.hidden = true;
+    els.exportResult.innerHTML = "";
+    renderSelectionCount();
+    syncAnimationPreview(false);
+  }
+  syncResultActions();
+}
+
+function syncResultActions() {
+  const hasJob = Boolean(state.job);
+  const hasSelection = hasJob && state.selected.size > 0;
+  els.openProcessedButton.disabled = !hasJob || !state.job?.processed_dir;
+  els.exportButton.disabled = !hasSelection;
+  els.selectAllButton.disabled = !hasJob;
+  els.selectNoneButton.disabled = !hasJob;
+  els.selectOddButton.disabled = !hasJob;
+  els.selectEvenButton.disabled = !hasJob;
+  els.invertSelectionButton.disabled = !hasJob;
+}
+
 function applyUpload(upload) {
   resetPreviewState();
   state.upload = upload;
@@ -1094,12 +1302,13 @@ function applyUpload(upload) {
 
   els.previewPanel.hidden = false;
   els.processPanel.hidden = false;
-  els.resultPanel.hidden = true;
+  els.resultPanel.hidden = false;
   els.exportResult.hidden = true;
   els.exportResult.innerHTML = "";
   els.frameGrid.innerHTML = "";
   els.jobSummary.innerHTML = "";
   resetProcessPreview();
+  showAnimationWorkbench();
   syncAnimationPreview();
 
   const mediaUrl = upload.media_url || upload.video_url;
@@ -1342,14 +1551,10 @@ async function processVideo() {
   await withBusy(els.processButton, async () => {
     stopPreviewTimer();
     const matteMode = currentMatteMode();
-    const usesCorridorKey = currentUsesCorridorKey();
+    const matteLabel = formatMatteModeLabel(matteMode);
     setStatus(
-      usesCorridorKey
-        ? matteMode.startsWith("birefnet")
-          ? "\u6B63\u5728\u8FD0\u884C BiRefNet \u548C CorridorKey \u7CBE\u4FEE\u3002"
-          : "\u6B63\u5728\u8FD0\u884C CorridorKey \u7CBE\u4FEE\u3002"
-        : matteMode.startsWith("birefnet")
-        ? "\u6B63\u5728\u8FD0\u884C BiRefNet AI \u62A0\u56FE\u3002"
+      matteMode !== "none"
+        ? `\u6B63\u5728\u8FD0\u884C ${matteLabel} \u62A0\u56FE\u3002`
         : isImageUpload()
         ? "\u6B63\u5728\u5904\u7406\u5355\u5F20\u56FE\u7247\u7684\u900F\u660E\u8FB9\u7F18\u548C\u7F29\u653E..."
         : "\u6b63\u5728\u62bd\u5e27\u5e76\u5904\u7406\u900f\u660e\u8fb9\u7f18\uff0c\u8fd9\u4e00\u6b65\u53ef\u80fd\u9700\u8981\u51e0\u5341\u79d2\u3002"
@@ -1386,14 +1591,10 @@ async function previewCurrentFrame() {
 
   await withBusy(els.previewFrameButton, async () => {
     const matteMode = currentMatteMode();
-    const usesCorridorKey = currentUsesCorridorKey();
+    const matteLabel = formatMatteModeLabel(matteMode);
     setStatus(
-      usesCorridorKey
-        ? matteMode.startsWith("birefnet")
-          ? "\u6B63\u5728\u9884\u89C8 BiRefNet \u548C CorridorKey \u7CBE\u4FEE\u3002"
-          : "\u6B63\u5728\u9884\u89C8 CorridorKey \u7CBE\u4FEE\u3002"
-        : matteMode.startsWith("birefnet")
-        ? "\u6B63\u5728\u7528 BiRefNet \u9884\u89C8\u5F53\u524D\u5E27\u62A0\u56FE\u3002"
+      matteMode !== "none"
+        ? `\u6B63\u5728\u9884\u89C8 ${matteLabel} \u62A0\u56FE\u3002`
         : isImageUpload()
         ? "\u6B63\u5728\u5957\u7528\u53C2\u6570\u9884\u89C8\u5355\u5F20\u56FE\u7247..."
         : "\u6b63\u5728\u62BD\u53D6\u5F53\u524D\u5E27\u5E76\u5957\u7528\u53C2\u6570..."
@@ -1540,6 +1741,7 @@ function updateSavePreviewButton() {
 
 function renderJob() {
   if (!state.job) {
+    showAnimationWorkbench();
     return;
   }
 
@@ -1550,7 +1752,10 @@ function renderJob() {
   const sourceMediaType = state.job.source_media_type || uploadMediaType();
   const outputWidth = options.output_width || options.target_size || "-";
   const outputHeight = options.output_height || options.target_size || "-";
-  const segmentLabel = sourceMediaType === "image"
+  const isCustomAnimation = sourceMediaType === "animation";
+  const segmentLabel = isCustomAnimation
+    ? "\u81EA\u5B9A\u4E49\u52A8\u753B\u5E27\u5E8F\u5217"
+    : sourceMediaType === "image"
     ? "\u5355\u5F20\u56FE\u7247\u8F93\u5165"
     : `${formatSeconds(options.start_time || 0)} - ${formatSeconds(options.end_time || 0)}`;
   els.resultPanel.hidden = false;
@@ -1562,7 +1767,7 @@ function renderJob() {
     summaryCard("\u62A0\u56FE\u6A21\u5F0F", escapeHtml(`${formatMatteModeLabel(matte)}${matteDetail ? ` / ${matteDetail}` : ""}`)),
     summaryCard("\u8F93\u51FA\u753B\u5E03", `${outputWidth} \u00d7 ${outputHeight}`),
     summaryCard("\u753B\u5E03\u5E03\u5C40", escapeHtml(formatCanvasModeLabel(options.canvas_mode))),
-    summaryCard("\u62BD\u5E27\u95F4\u9694", sourceMediaType === "image" ? "\u5355\u5F20\u56FE\u7247" : `\u6BCF ${options.keep_every || 1} \u5E27\u4FDD\u7559\u4E00\u5F20`),
+    summaryCard("\u62BD\u5E27\u95F4\u9694", isCustomAnimation ? "\u6309\u6587\u4EF6\u540D\u987A\u5E8F" : sourceMediaType === "image" ? "\u5355\u5F20\u56FE\u7247" : `\u6BCF ${options.keep_every || 1} \u5E27\u4FDD\u7559\u4E00\u5F20`),
     summaryCard("\u8F93\u5165\u533A\u95F4", segmentLabel),
   ];
   if (matte.mode === "chroma") {
@@ -1578,6 +1783,7 @@ function renderJob() {
   }
   els.jobSummary.innerHTML = summaryCards.join("");
   renderFrames();
+  syncResultActions();
   persistSession();
 }
 
@@ -1601,7 +1807,7 @@ function renderFrames() {
           <img src="${frame.thumb_url}" alt="frame ${frameNumber}">
           <div class="frame-meta">
             <span>#${frameNumber}</span>
-            <span>${escapeHtml(frame.name)}</span>
+            <span>${escapeHtml(frame.original_name || frame.name)}</span>
           </div>
         </label>
       `;
@@ -1609,12 +1815,14 @@ function renderFrames() {
     .join("");
   renderSelectionCount();
   syncAnimationPreview();
+  syncResultActions();
   persistSession();
 }
 
 function renderSelectionCount() {
   const total = state.job?.frame_count || 0;
   els.selectionCount.textContent = `\u5df2\u9009 ${state.selected.size} / ${total} \u5e27`;
+  syncResultActions();
 }
 
 function refreshCardSelection(index, checked) {
@@ -1765,6 +1973,32 @@ function normalizeHexColor(value, fallback = "#F6FBF6") {
     return raw;
   }
   return fallback;
+}
+
+function normalizeProcessPreviewBackgroundMode(value) {
+  return value === "color" ? "color" : "checkerboard";
+}
+
+function updateProcessPreviewBackground(mode, color, shouldPersist = false) {
+  const normalizedMode = normalizeProcessPreviewBackgroundMode(mode);
+  const normalizedColor = normalizeHexColor(color, state.processPreviewBackground.color);
+  state.processPreviewBackground.mode = normalizedMode;
+  state.processPreviewBackground.color = normalizedColor;
+
+  els.processPreviewBackgroundModeInput.value = normalizedMode;
+  els.processPreviewBackgroundInput.value = normalizedColor;
+  els.processPreviewBackgroundLabel.textContent = normalizedColor;
+  els.processPreviewBackgroundColorRow.hidden = normalizedMode !== "color";
+
+  if (els.previewProcessedStage) {
+    els.previewProcessedStage.style.setProperty("--process-preview-bg-color", normalizedColor);
+    els.previewProcessedStage.classList.toggle("checkerboard-stage", normalizedMode === "checkerboard");
+    els.previewProcessedStage.classList.toggle("solid-preview-stage", normalizedMode === "color");
+  }
+
+  if (shouldPersist) {
+    persistSession();
+  }
 }
 
 function setPreviewStageBackground(color) {
@@ -2040,6 +2274,7 @@ async function exportFrames() {
   }
   if (state.selected.size === 0) {
     setStatus("\u81f3\u5c11\u9009\u4e00\u5e27\u518d\u5bfc\u51fa\u3002", "error");
+    syncResultActions();
     return;
   }
 
@@ -2123,13 +2358,13 @@ function formatFfmpegAccelLabel(ffmpegAccel) {
 function updateChromaVisibility() {
   const matteMode = currentMatteMode();
   const chromaEnabled = matteMode !== "none";
-  const isChroma = chromaEnabled && matteMode === "chroma";
-  const isAi = chromaEnabled && matteMode.startsWith("birefnet");
-  const isLuma = chromaEnabled && matteMode === "birefnet_luma";
-  const isCorridorCapable = chromaEnabled;
-  const isCorridor = isCorridorCapable && els.corridorEnabledInput.checked;
-  const usesSpillControls = isChroma || isAi || isCorridor;
+  const isChroma = chromaEnabled && matteModeUsesChromaSeed(matteMode);
+  const isAi = chromaEnabled && matteModeUsesBiRefNet(matteMode);
+  const isLuma = chromaEnabled && matteModeUsesLuma(matteMode);
+  const isCorridor = chromaEnabled && matteModeUsesCorridorKey(matteMode);
+  const usesSpillControls = chromaEnabled;
   const isManual = els.keyModeInput.value === "manual";
+  els.corridorEnabledInput.checked = isCorridor;
   els.matteModeInput.disabled = !els.chromaEnabledInput.checked;
   els.keyModeInput.closest(".field").style.display = usesSpillControls ? "" : "none";
   els.manualColorField.style.display = usesSpillControls && isManual ? "" : "none";
@@ -2146,7 +2381,7 @@ function updateChromaVisibility() {
     node.style.display = isLuma ? "" : "none";
   });
   document.querySelectorAll(".corridor-capable-only").forEach((node) => {
-    node.style.display = isCorridorCapable ? "" : "none";
+    node.style.display = "none";
   });
   document.querySelectorAll(".corridor-key-only").forEach((node) => {
     node.style.display = isCorridor ? "" : "none";
@@ -2178,7 +2413,19 @@ async function apiJson(url, options = {}) {
     fetchOptions.body = JSON.stringify(fetchOptions.body);
   }
 
-  const response = await fetch(url, fetchOptions);
+  let response;
+  try {
+    response = await fetch(url, fetchOptions);
+  } catch (error) {
+    throw new Error(`\u8BF7\u6C42\u5931\u8D25\uFF1A${error.message || String(error)}\u3002\u8BF7\u786E\u8BA4 Sprite Video Lab \u540E\u7AEF\u6B63\u5728\u8FD0\u884C\uFF0C\u5E76\u5DF2\u91CD\u542F\u5230\u6700\u65B0\u7248\u672C\u3002`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const detail = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 180);
+    throw new Error(`\u63A5\u53E3\u672A\u8FD4\u56DE JSON\uFF08HTTP ${response.status}\uFF09\u3002\u8BF7\u91CD\u542F Sprite Video Lab \u540E\u7AEF\u540E\u518D\u8BD5\u3002${detail ? ` ${detail}` : ""}`);
+  }
+
   const data = await response.json();
   if (!response.ok || !data.ok) {
     throw new Error(data.error || `HTTP ${response.status}`);

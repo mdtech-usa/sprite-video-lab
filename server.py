@@ -43,6 +43,7 @@ LANCZOS = Image.Resampling.LANCZOS
 APP_VERSION_POLL_MS = 1200
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+ANIMATION_FRAME_EXTENSIONS = IMAGE_EXTENSIONS
 CONTENT_TYPE_EXTENSIONS = {
     "video/mp4": ".mp4",
     "video/quicktime": ".mov",
@@ -83,7 +84,16 @@ AI_MATTE_MODEL_LABELS = {
     "birefnet-lite-2k": "BiRefNet lite-2K",
     "birefnet-general": "BiRefNet general",
 }
-AI_MATTE_MODES = {"none", "chroma", "birefnet", "birefnet_luma"}
+AI_MATTE_MODES = {
+    "none",
+    "chroma",
+    "birefnet",
+    "corridorkey",
+    "luma",
+    "birefnet_corridorkey",
+    "birefnet_luma",
+    "birefnet_luma_corridorkey",
+}
 AI_MATTE_DEVICE_ALIASES = {
     "": "auto",
     "auto": "auto",
@@ -255,10 +265,33 @@ def normalize_matte_mode(raw: str, chroma_enabled: bool) -> str:
         "color": "chroma",
         "green": "chroma",
         "green_screen": "chroma",
+        "greenscreen": "chroma",
+        "green_key": "chroma",
+        "chroma_key": "chroma",
         "ai": "birefnet",
         "birefnet": "birefnet",
+        "corridor": "corridorkey",
+        "corridor_key": "corridorkey",
+        "corridorkey": "corridorkey",
+        "luma": "luma",
+        "luma_key": "luma",
+        "luminance": "luma",
+        "birefnet_corridor": "birefnet_corridorkey",
+        "birefnet_corridor_key": "birefnet_corridorkey",
+        "birefnet_corridorkey": "birefnet_corridorkey",
+        "birefnet+corridor": "birefnet_corridorkey",
+        "birefnet+corridorkey": "birefnet_corridorkey",
         "birefnet_luma": "birefnet_luma",
         "birefnet+luma": "birefnet_luma",
+        "birefnet_luma_corridorkey": "birefnet_luma_corridorkey",
+        "birefnet_luma_corridor": "birefnet_luma_corridorkey",
+        "birefnet_luma_corridor_key": "birefnet_luma_corridorkey",
+        "birefnet_corridorkey_luma": "birefnet_luma_corridorkey",
+        "birefnet_corridor_luma": "birefnet_luma_corridorkey",
+        "birefnet+luma+corridor": "birefnet_luma_corridorkey",
+        "birefnet+luma+corridorkey": "birefnet_luma_corridorkey",
+        "birefnet+corridor+luma": "birefnet_luma_corridorkey",
+        "birefnet+corridorkey+luma": "birefnet_luma_corridorkey",
         "ai_luma": "birefnet_luma",
         "ai_glow": "birefnet_luma",
     }
@@ -406,6 +439,17 @@ def static_image_payload() -> dict:
         "selected_mode": "",
         "used_mode": "image",
         "used_label": "Static image",
+        "fallback_to_cpu": False,
+        "fallback_reason": "",
+    }
+
+
+def custom_animation_payload() -> dict:
+    return {
+        "requested_mode": "animation",
+        "selected_mode": "",
+        "used_mode": "animation",
+        "used_label": "Custom animation frames",
         "fallback_to_cpu": False,
         "fallback_reason": "",
     }
@@ -1272,7 +1316,7 @@ def apply_matte_pipeline(
         "repo_id": "",
         "device": "",
         "resolution": 0,
-        "luma_enabled": mode == "birefnet_luma",
+        "luma_enabled": mode in {"luma", "birefnet_luma", "birefnet_luma_corridorkey"},
         "luma_black": normalized_luma_black,
         "luma_white": normalized_luma_white,
         "luma_gamma": max(0.05, float(luma_gamma or 1.0)),
@@ -1284,13 +1328,14 @@ def apply_matte_pipeline(
         "corridorkey_device": "",
         "corridorkey_resolution": 0,
     }
-    use_corridorkey = bool(corridorkey_enabled and mode != "none")
+    mode_uses_corridorkey = mode in {"corridorkey", "birefnet_corridorkey", "birefnet_luma_corridorkey"}
+    use_corridorkey = bool((corridorkey_enabled or mode_uses_corridorkey) and mode != "none")
     resolved_corridorkey_screen = resolve_corridorkey_screen(corridorkey_screen, key_rgb)
 
     if mode == "none":
         return raw_images, key_rgb, matte_info
 
-    if mode == "chroma":
+    if mode in {"chroma", "corridorkey"}:
         keyed_frames = []
         corridor_info: dict | None = None
         for raw_image in raw_images:
@@ -1317,6 +1362,25 @@ def apply_matte_pipeline(
             matte_info.update(corridor_info)
         return keyed_frames, key_rgb, matte_info
 
+    if mode == "luma":
+        keyed_frames: list[Image.Image] = []
+        for raw_image in raw_images:
+            alpha = luminance_alpha_mask(
+                raw_image,
+                matte_info["luma_black"],
+                max(matte_info["luma_black"] + 1, matte_info["luma_white"]),
+                matte_info["luma_gamma"],
+                matte_info["luma_strength"],
+                key_rgb=key_rgb,
+            )
+            if matte_info["halo_pixels"] > 0:
+                filter_size = (matte_info["halo_pixels"] * 2) + 1
+                alpha = alpha.filter(ImageFilter.MinFilter(filter_size))
+            keyed_frame = apply_alpha_mask(raw_image, alpha)
+            keyed_frame = despill_alpha_edges(keyed_frame, key_rgb, matte_info["despill_strength"])
+            keyed_frames.append(keyed_frame)
+        return keyed_frames, key_rgb, matte_info
+
     keyed_frames: list[Image.Image] = []
     ai_info: dict | None = None
     corridor_info: dict | None = None
@@ -1325,7 +1389,7 @@ def apply_matte_pipeline(
         if matte_info["halo_pixels"] > 0:
             filter_size = (matte_info["halo_pixels"] * 2) + 1
             ai_alpha = ai_alpha.filter(ImageFilter.MinFilter(filter_size))
-        if mode == "birefnet_luma":
+        if mode in {"birefnet_luma", "birefnet_luma_corridorkey"}:
             luma_alpha = luminance_alpha_mask(
                 raw_image,
                 matte_info["luma_black"],
@@ -1838,9 +1902,7 @@ def preview_frame(
         _, ffmpeg_accel = extract_single_frame(source_path, raw_path, sample_time)
     raw_image = open_rgba_image(raw_path)
 
-    source_preview = raw_image.copy()
-    source_preview.thumbnail((320, 320))
-    source_preview.save(source_preview_path)
+    raw_image.save(source_preview_path)
 
     keyed_frames, key_rgb, matte_info = apply_matte_pipeline(
         raw_images=[raw_image],
@@ -1998,6 +2060,123 @@ def save_preview_as_job(preview_id: str) -> dict:
     return manifest
 
 
+def natural_sort_key(value: str) -> list[object]:
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", value)]
+
+
+def field_storage_items(form: cgi.FieldStorage, key: str) -> list:
+    if key not in form:
+        return []
+    value = form[key]
+    return value if isinstance(value, list) else [value]
+
+
+def import_animation_frames_to_job(file_items: list) -> dict:
+    candidates = []
+    for item in file_items:
+        raw_filename = str(getattr(item, "filename", "") or "frame")
+        display_name = Path(raw_filename.replace("\\", "/")).name or "frame"
+        if not getattr(item, "file", None):
+            continue
+        suffix = Path(display_name).suffix.lower()
+        content_type = str(getattr(item, "type", "") or "")
+        if suffix not in ANIMATION_FRAME_EXTENSIONS and not content_type.startswith("image/"):
+            continue
+        candidates.append((raw_filename, display_name, item))
+
+    candidates.sort(key=lambda pair: natural_sort_key(pair[0]))
+    if not candidates:
+        raise ValueError("no supported image frames found")
+
+    job_id = timestamped_id()
+    root = job_dir(job_id)
+    raw_dir = root / "raw"
+    processed_dir = root / "processed"
+    thumbs_dir = root / "thumbs"
+    for directory in (raw_dir, processed_dir, thumbs_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    frame_entries: list[dict] = []
+    max_width = 0
+    max_height = 0
+    for index, (_, display_name, item) in enumerate(candidates):
+        frame_name = f"frame_{index + 1:03d}.png"
+        thumb_name = f"thumb_{index + 1:03d}.png"
+        raw_path = raw_dir / frame_name
+        frame_path = processed_dir / frame_name
+        thumb_path = thumbs_dir / thumb_name
+
+        with Image.open(item.file) as source_image:
+            image = source_image.convert("RGBA")
+            image.save(raw_path)
+            image.save(frame_path)
+            thumb = image.copy()
+            thumb.thumbnail((128, 128))
+            thumb.save(thumb_path)
+            bbox = image.getchannel("A").getbbox()
+            max_width = max(max_width, image.size[0])
+            max_height = max(max_height, image.size[1])
+
+            frame_entries.append(
+                {
+                    "index": index,
+                    "name": frame_name,
+                    "original_name": display_name,
+                    "url": f"/work/jobs/{job_id}/processed/{frame_name}",
+                    "thumb_url": f"/work/jobs/{job_id}/thumbs/{thumb_name}",
+                    "bbox": list(bbox) if bbox else None,
+                    "width": image.size[0],
+                    "height": image.size[1],
+                }
+            )
+            image.close()
+
+    manifest = {
+        "job_id": job_id,
+        "upload_id": "",
+        "job_dir": str(root),
+        "processed_dir": str(processed_dir),
+        "raw_dir": str(raw_dir),
+        "source_path": "",
+        "source_media_type": "animation",
+        "ffmpeg_accel": custom_animation_payload(),
+        "video_info": {
+            "media_type": "animation",
+            "duration": 0,
+            "fps": 0,
+            "width": max_width,
+            "height": max_height,
+        },
+        "options": {
+            "start_time": 0,
+            "end_time": 0,
+            "keep_every": 1,
+            "target_size": max_height,
+            "reduce_px": 0,
+            "canvas_mode": "custom",
+            "output_width": max_width,
+            "output_height": max_height,
+            "chroma_enabled": False,
+            "matte_mode": "none",
+            "matte": {"mode": "none", "source": "custom_animation"},
+            "key_mode": "none",
+            "key_color": "#000000",
+            "threshold": 0,
+            "softness": 0,
+            "despill_strength": 0,
+            "halo_pixels": 0,
+            "corridorkey_enabled": False,
+            "corridorkey_screen": "auto",
+            "scale": 1,
+            "source_order": "filename",
+        },
+        "frame_count": len(frame_entries),
+        "frames": frame_entries,
+    }
+    save_job_manifest(job_id, manifest)
+    return manifest
+
+
 def export_job(job_id: str, selected_indices: list[int], sheet_columns: int) -> dict:
     manifest = load_job_manifest(job_id)
     processed_dir = job_dir(job_id) / "processed"
@@ -2028,9 +2207,15 @@ def export_job(job_id: str, selected_indices: list[int], sheet_columns: int) -> 
         for frame_path in copied_paths:
             archive.write(frame_path, arcname=frame_path.name)
 
-    first_image = open_rgba_image(copied_paths[0])
-    cell_width, cell_height = first_image.size
-    first_image.close()
+    cell_width = 0
+    cell_height = 0
+    frame_sizes: list[tuple[int, int]] = []
+    for frame_path in copied_paths:
+        frame = open_rgba_image(frame_path)
+        frame_sizes.append(frame.size)
+        cell_width = max(cell_width, frame.size[0])
+        cell_height = max(cell_height, frame.size[1])
+        frame.close()
     columns = max(1, sheet_columns or round(math.sqrt(len(copied_paths))))
     rows = math.ceil(len(copied_paths) / columns)
     sheet = Image.new("RGBA", (columns * cell_width, rows * cell_height), (0, 0, 0, 0))
@@ -2038,7 +2223,10 @@ def export_job(job_id: str, selected_indices: list[int], sheet_columns: int) -> 
         row = index // columns
         column = index % columns
         frame = open_rgba_image(frame_path)
-        sheet.paste(frame, (column * cell_width, row * cell_height), frame)
+        frame_width, frame_height = frame_sizes[index]
+        offset_x = column * cell_width + (cell_width - frame_width) // 2
+        offset_y = row * cell_height + (cell_height - frame_height) // 2
+        sheet.paste(frame, (offset_x, offset_y), frame)
         frame.close()
     sheet_path = target_dir / "sprite_sheet.png"
     sheet.save(sheet_path)
@@ -2047,6 +2235,8 @@ def export_job(job_id: str, selected_indices: list[int], sheet_columns: int) -> 
         "job_id": job_id,
         "selected_indices": indices,
         "sheet_columns": columns,
+        "cell_width": cell_width,
+        "cell_height": cell_height,
         "frame_count": len(copied_paths),
         "frames_dir": str(frames_dir),
         "zip_path": str(zip_path),
@@ -2131,6 +2321,19 @@ class AppHandler(BaseHTTPRequestHandler):
                     raise ValueError("media file missing")
                 result = register_uploaded_file(file_item)
                 self.send_json({"ok": True, "upload": result})
+                return
+            if parsed.path == "/api/import-animation":
+                form = cgi.FieldStorage(
+                    fp=self.rfile,
+                    headers=self.headers,
+                    environ={
+                        "REQUEST_METHOD": "POST",
+                        "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+                        "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
+                    },
+                )
+                result = import_animation_frames_to_job(field_storage_items(form, "frames"))
+                self.send_json({"ok": True, "job": result})
                 return
             if parsed.path == "/api/process":
                 payload = self.read_json_body()
