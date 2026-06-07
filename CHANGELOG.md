@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0 - 2026-06-07
+
+### Features
+- Add GIF input support with generated MP4 previews for browser playback and frame extraction.
+- Add automatic BiRefNet fallback to the general model when the selected model produces a weak or nearly empty alpha mask.
+- Add an experimental line-cleaner page with Lanczos shrinking and optional Real-ESRGAN anime processing.
+- Add persisted frame-boundary payload fields for selected segment processing.
+
+### Fixes
+- Tighten segment preview playback so the selected end frame no longer shows an extra frame.
+- Clamp single-frame preview sampling to the selected segment.
+
+### Documentation
+- Replace manual human installation steps with an agent-focused installation guide.
+- Document GIF input support and the experimental line-cleaner entry point.
+
 ## 0.1.1 - 2026-05-15
 
 ### Documentation
