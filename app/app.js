@@ -4,6 +4,8 @@ const state = {
   exportResult: null,
   processPreview: null,
   selected: new Set(),
+  orderedSelectionMode: false,
+  selectionOrder: [],
   segment: { start: 0, end: 0, startFrame: 1, endFrame: 1, confirmed: false },
   segmentPlaybackRafId: null,
   preview: {
@@ -17,6 +19,7 @@ const state = {
     background: "#F6FBF6",
   },
   magicPreview: null,
+  magicInFlight: false,
   magicResizeMode: "hard",
   processPreviewZoom: {
     source: 100,
@@ -264,6 +267,7 @@ function bindElements() {
     "selectOddButton",
     "selectEvenButton",
     "invertSelectionButton",
+    "orderedSelectionInput",
     "exportButton",
     "magicResizeHardInput",
     "magicResizeSoftInput",
@@ -365,22 +369,23 @@ function bindEvents() {
     if (Number.isNaN(index)) {
       return;
     }
-    if (target.checked) {
-      state.selected.add(index);
-    } else {
-      state.selected.delete(index);
-    }
+    setFrameSelected(index, target.checked);
     clearMagicPreview();
-    refreshCardSelection(index, target.checked);
-    renderSelectionCount();
-    syncAnimationPreview();
-    syncResultActions();
-    persistSession();
+    if (state.orderedSelectionMode) {
+      renderFrames();
+    } else {
+      refreshCardSelection(index, target.checked);
+      renderSelectionCount();
+      syncAnimationPreview();
+      syncResultActions();
+      persistSession();
+    }
   });
 
   els.selectAllButton.addEventListener("click", () => selectFrames(() => true));
   els.selectNoneButton.addEventListener("click", () => {
     state.selected = new Set();
+    state.selectionOrder = [];
     state.preview.currentIndex = 0;
     clearMagicPreview();
     renderFrames();
@@ -396,6 +401,14 @@ function bindEvents() {
       }
     });
     state.selected = next;
+    state.selectionOrder = state.job.frames.filter((frame) => next.has(frame.index)).map((frame) => frame.index);
+    state.preview.currentIndex = 0;
+    clearMagicPreview();
+    renderFrames();
+  });
+  els.orderedSelectionInput.addEventListener("change", () => {
+    state.orderedSelectionMode = els.orderedSelectionInput.checked;
+    normalizeSelectionOrder();
     state.preview.currentIndex = 0;
     clearMagicPreview();
     renderFrames();
@@ -1033,12 +1046,15 @@ function applyFormState(snapshot) {
 
 function persistSession() {
   try {
+    const selectionOrder = normalizeSelectionOrder();
     const snapshot = {
       upload: state.upload,
       job: state.job,
       exportResult: state.exportResult,
       processPreview: state.processPreview,
       selectedIndices: Array.from(state.selected).sort((a, b) => a - b),
+      orderedSelectionMode: state.orderedSelectionMode,
+      selectionOrder,
       preview: {
         isPlaying: state.preview.isPlaying,
         currentIndex: state.preview.currentIndex,
@@ -1068,6 +1084,11 @@ function restoreSessionFromStorage() {
 
   if (!snapshot) {
     return;
+  }
+
+  state.orderedSelectionMode = Boolean(snapshot.orderedSelectionMode);
+  if (els.orderedSelectionInput) {
+    els.orderedSelectionInput.checked = state.orderedSelectionMode;
   }
 
   if (!snapshot.upload && !snapshot.job?.frames) {
@@ -1114,10 +1135,16 @@ function restoreSessionFromStorage() {
     state.job = snapshot.job;
     state.exportResult = snapshot.exportResult || null;
     if (Array.isArray(snapshot.selectedIndices)) {
-      state.selected = new Set(snapshot.selectedIndices);
+      state.selected = new Set(
+        snapshot.selectedIndices.map((index) => Number(index)).filter((index) => !Number.isNaN(index))
+      );
     } else {
       state.selected = new Set(snapshot.job.frames.map((frame) => frame.index));
     }
+    state.selectionOrder = Array.isArray(snapshot.selectionOrder)
+      ? snapshot.selectionOrder.map((index) => Number(index)).filter((index) => !Number.isNaN(index))
+      : Array.from(state.selected);
+    normalizeSelectionOrder();
     state.preview.currentIndex = clamp(
       Number(snapshot.preview?.currentIndex || 0),
       0,
@@ -1462,6 +1489,7 @@ async function importCustomAnimationFrames(files, button) {
     state.exportResult = null;
     clearMagicPreview();
     state.selected = new Set(data.job.frames.map((frame) => frame.index));
+    state.selectionOrder = data.job.frames.map((frame) => frame.index);
     state.preview.currentIndex = 0;
     state.preview.isPlaying = true;
     els.previewReverseInput.checked = state.preview.isReversed;
@@ -1481,6 +1509,7 @@ function clearPreviewFrames() {
   state.exportResult = null;
   clearMagicPreview();
   state.selected = new Set();
+  state.selectionOrder = [];
   els.jobSummary.innerHTML = "";
   els.frameGrid.innerHTML = "";
   els.exportResult.hidden = true;
@@ -1511,12 +1540,13 @@ function syncResultActions() {
   const hasSelection = hasJob && state.selected.size > 0;
   els.openProcessedButton.disabled = !hasJob || !state.job?.processed_dir;
   els.exportButton.disabled = !hasSelection;
-  els.magicButton.disabled = !hasSelection;
+  els.magicButton.disabled = !hasSelection || state.magicInFlight;
   els.selectAllButton.disabled = !hasJob;
   els.selectNoneButton.disabled = !hasJob;
   els.selectOddButton.disabled = !hasJob;
   els.selectEvenButton.disabled = !hasJob;
   els.invertSelectionButton.disabled = !hasJob;
+  els.orderedSelectionInput.disabled = !hasJob;
 }
 
 function resetSizingControlsForNewUpload() {
@@ -1532,6 +1562,7 @@ function applyUpload(upload, { resetSizing = true } = {}) {
   state.processPreview = null;
   clearMagicPreview();
   state.selected = new Set();
+  state.selectionOrder = [];
   if (resetSizing) {
     resetSizingControlsForNewUpload();
   }
@@ -1916,6 +1947,7 @@ async function processVideo() {
     state.exportResult = null;
     clearMagicPreview();
     state.selected = new Set(data.job.frames.map((frame) => frame.index));
+    state.selectionOrder = data.job.frames.map((frame) => frame.index);
     state.preview.currentIndex = 0;
     renderJob();
     setStatus(
@@ -2212,14 +2244,17 @@ function renderFrames() {
     return;
   }
 
+  const orderMap = state.orderedSelectionMode ? getSelectionOrderMap() : new Map();
   els.frameGrid.innerHTML = state.job.frames
     .map((frame) => {
       const checked = state.selected.has(frame.index);
       const frameNumber = String(frame.index + 1).padStart(3, "0");
+      const orderNumber = orderMap.get(frame.index);
       return `
         <label class="frame-card ${checked ? "selected" : ""}" data-index="${frame.index}">
-          <div class="frame-check">
+          <div class="frame-check ${orderNumber ? "ordered" : ""}">
             <input type="checkbox" data-index="${frame.index}" ${checked ? "checked" : ""}>
+            ${orderNumber ? `<span class="frame-order-number">${orderNumber}</span>` : ""}
           </div>
           <img src="${frame.thumb_url}" alt="frame ${frameNumber}">
           <div class="frame-meta">
@@ -2249,9 +2284,62 @@ function refreshCardSelection(index, checked) {
   }
 }
 
+function setFrameSelected(index, checked) {
+  if (!state.job) {
+    return;
+  }
+  if (checked) {
+    state.selected.add(index);
+    state.selectionOrder = state.selectionOrder.filter((item) => item !== index);
+    state.selectionOrder.push(index);
+  } else {
+    state.selected.delete(index);
+    state.selectionOrder = state.selectionOrder.filter((item) => item !== index);
+  }
+  normalizeSelectionOrder();
+}
+
+function normalizeSelectionOrder() {
+  if (!state.job) {
+    state.selectionOrder = [];
+    return state.selectionOrder;
+  }
+
+  const available = new Set(state.job.frames.map((frame) => frame.index));
+  const validSelection = new Set();
+  state.selected.forEach((index) => {
+    if (available.has(index)) {
+      validSelection.add(index);
+    }
+  });
+  state.selected = validSelection;
+
+  const seen = new Set();
+  const ordered = [];
+  state.selectionOrder.forEach((index) => {
+    if (validSelection.has(index) && !seen.has(index)) {
+      ordered.push(index);
+      seen.add(index);
+    }
+  });
+  state.job.frames.forEach((frame) => {
+    if (validSelection.has(frame.index) && !seen.has(frame.index)) {
+      ordered.push(frame.index);
+      seen.add(frame.index);
+    }
+  });
+  state.selectionOrder = ordered;
+  return state.selectionOrder;
+}
+
+function getSelectionOrderMap() {
+  return new Map(normalizeSelectionOrder().map((index, order) => [index, order + 1]));
+}
+
 function selectFrames(predicate) {
   if (!state.job) return;
   state.selected = new Set(state.job.frames.filter(predicate).map((frame) => frame.index));
+  state.selectionOrder = state.job.frames.filter((frame) => state.selected.has(frame.index)).map((frame) => frame.index);
   state.preview.currentIndex = 0;
   clearMagicPreview();
   renderFrames();
@@ -2261,7 +2349,12 @@ function getSelectedFrames() {
   if (!state.job) {
     return [];
   }
-  const frames = state.job.frames.filter((frame) => state.selected.has(frame.index));
+  const frameMap = new Map(state.job.frames.map((frame) => [frame.index, frame]));
+  const frames = state.orderedSelectionMode
+    ? normalizeSelectionOrder()
+        .map((index) => frameMap.get(index))
+        .filter(Boolean)
+    : state.job.frames.filter((frame) => state.selected.has(frame.index));
   return state.preview.isReversed ? frames.reverse() : frames;
 }
 
@@ -2890,6 +2983,10 @@ function syncAnimationPreview(shouldRestartTimer = true) {
 }
 
 async function runMagicPreview() {
+  if (state.magicInFlight) {
+    setStatus("MAGIC \u6B63\u5728\u5904\u7406\uFF0C\u5148\u7B49\u5F53\u524D\u8FD9\u8F6E\u7ED3\u675F\u3002");
+    return;
+  }
   if (!state.job) {
     setStatus("\u8FD8\u6CA1\u6709\u53EF\u4EE5 MAGIC \u7684\u5904\u7406\u7ED3\u679C\u3002", "error");
     return;
@@ -2900,24 +2997,38 @@ async function runMagicPreview() {
     return;
   }
 
-  await withBusy(els.magicButton, async () => {
-    const selectedFrames = getSelectedFrames();
-    const resizeMode = normalizeMagicResizeMode(state.magicResizeMode);
-    const resizeModeLabel = magicResizeModeLabel(resizeMode);
-    clearMagicPreview();
-    setStatus(`MAGIC \u6B63\u5728\u5904\u7406 ${selectedFrames.length} \u5E27\uFF1AReal-ESRGAN \u8D85\u5206\u540E${resizeModeLabel}\u7F29\u5C0F\u5230 1/2\u30011/4\u30011/8...`);
-    const data = await apiJson("/api/magic-preview", {
-      method: "POST",
-      body: {
-        job_id: state.job.job_id,
-        selected_indices: selectedFrames.map((frame) => frame.index),
-        resize_mode: resizeMode,
-      },
+  state.magicInFlight = true;
+  syncResultActions();
+  try {
+    await withBusy(els.magicButton, async () => {
+      const selectedFrames = getSelectedFrames();
+      const resizeMode = normalizeMagicResizeMode(state.magicResizeMode);
+      const resizeModeLabel = magicResizeModeLabel(resizeMode);
+      clearMagicPreview();
+      setStatus(`MAGIC \u6B63\u5728\u5904\u7406 ${selectedFrames.length} \u5E27\uFF1AReal-ESRGAN \u8D85\u5206\u540E${resizeModeLabel}\u7F29\u5C0F\u5230 1/2\u30011/4\u30011/8...`);
+      const data = await apiJson("/api/magic-preview", {
+        method: "POST",
+        body: {
+          job_id: state.job.job_id,
+          selected_indices: selectedFrames.map((frame) => frame.index),
+          resize_mode: resizeMode,
+        },
+      });
+      state.magicPreview = data.magic;
+      showMagicPreview();
+      const generatedCount = Number(data.magic.generated_count || 0);
+      const reusedCount = Number(data.magic.reused_count || 0);
+      const cacheLabel = reusedCount > 0
+        ? generatedCount > 0
+          ? `\uFF0C\u672C\u6B21\u65B0\u751F\u6210 ${generatedCount} \u5E27\uFF0C\u590D\u7528\u7F13\u5B58 ${reusedCount} \u5E27`
+          : `\uFF0C\u672C\u6B21\u5168\u90E8\u590D\u7528\u7F13\u5B58\uFF0C\u6CA1\u6709\u91CD\u65B0\u751F\u6210`
+        : "";
+      setStatus(`MAGIC \u5B8C\u6210\uFF0C${data.magic.resize_mode_label || resizeModeLabel}\u7F29\u5C0F\uFF0C\u5DF2\u751F\u6210 ${data.magic.frame_count} \u5E27 1/2\u30011/4\u30011/8 \u5C3A\u5BF8\u5BF9\u6BD4\u9884\u89C8${cacheLabel}\u3002`, "success");
     });
-    state.magicPreview = data.magic;
-    showMagicPreview();
-    setStatus(`MAGIC \u5B8C\u6210\uFF0C${data.magic.resize_mode_label || resizeModeLabel}\u7F29\u5C0F\uFF0C\u5DF2\u751F\u6210 ${data.magic.frame_count} \u5E27 1/2\u30011/4\u30011/8 \u5C3A\u5BF8\u5BF9\u6BD4\u9884\u89C8\u3002`, "success");
-  });
+  } finally {
+    state.magicInFlight = false;
+    syncResultActions();
+  }
 }
 
 async function exportMagicFrames(variantKey = "half", button = els.exportMagicFramesButton) {

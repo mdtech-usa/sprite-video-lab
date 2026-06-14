@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -31,6 +32,7 @@ EXPORTS_DIR = WORK_DIR / "exports"
 PREVIEWS_DIR = WORK_DIR / "previews"
 LINE_CLEANER_DIR = WORK_DIR / "line-cleaner"
 MAGIC_DIR = WORK_DIR / "magic"
+MAGIC_PREVIEW_LOCK = threading.Lock()
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8894
@@ -3094,6 +3096,63 @@ def run_realesrgan_anime(input_path: Path, output_path: Path, output_scale: int 
         raise RuntimeError("Real-ESRGAN anime did not produce an output image")
 
 
+def resolve_magic_variant_dir(manifest: dict, variant: dict) -> Path:
+    source_dir = Path(str(variant.get("frames_dir") or ""))
+    if not source_dir.is_absolute():
+        source_dir = MAGIC_DIR / f"{manifest['magic_id']}-magic" / str(source_dir)
+    return source_dir
+
+
+def find_cached_magic_frames(job_id: str, resize_mode: str) -> dict[int, dict[str, dict]]:
+    cache: dict[int, dict[str, dict]] = {}
+    manifest_paths = sorted(
+        MAGIC_DIR.glob("*-magic/manifest.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for manifest_path in manifest_paths:
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if manifest.get("job_id") != job_id:
+            continue
+        if manifest.get("model") != REAL_ESRGAN_ANIME_MODEL:
+            continue
+        if normalize_magic_resize_mode(manifest.get("resize_mode")) != resize_mode:
+            continue
+
+        variant_sources: dict[str, dict[int, dict]] = {}
+        for variant_config in MAGIC_VARIANTS:
+            variant = magic_manifest_variant(manifest, str(variant_config["key"]))
+            source_dir = resolve_magic_variant_dir(manifest, variant)
+            entries: dict[int, dict] = {}
+            for entry in variant.get("frames") or []:
+                source_index = safe_int(entry.get("source_index"), -1)
+                source_path = source_dir / str(entry.get("name") or "")
+                if source_index >= 0 and source_path.exists():
+                    entries[source_index] = {
+                        "entry": entry,
+                        "path": source_path,
+                    }
+            variant_sources[str(variant_config["key"])] = entries
+
+        primary_entries = variant_sources.get(str(MAGIC_VARIANTS[0]["key"]), {})
+        for source_index in primary_entries:
+            if source_index in cache:
+                continue
+            cached_variants = {}
+            for variant_config in MAGIC_VARIANTS:
+                variant_key = str(variant_config["key"])
+                cached = variant_sources.get(variant_key, {}).get(source_index)
+                if not cached:
+                    break
+                cached_variants[variant_key] = cached
+            else:
+                cache[source_index] = cached_variants
+    return cache
+
+
 def process_line_cleaner_frames(
     file_items: list,
     method: str,
@@ -3304,6 +3363,9 @@ def magic_preview_job(
     for directory in (ai_input_dir, ai_output_dir, *[Path(variant["frames_dir"]) for variant in variants.values()]):
         directory.mkdir(parents=True, exist_ok=True)
 
+    cached_magic = find_cached_magic_frames(job_id, resize_mode)
+    generated_count = 0
+    reused_count = 0
     for output_index, frame_index in enumerate(indices, start=1):
         entry = frame_map[frame_index]
         source_path = processed_dir / entry["name"]
@@ -3311,9 +3373,45 @@ def magic_preview_job(
         ai_input_path = ai_input_dir / frame_name
         ai_output_path = ai_output_dir / frame_name
 
+        cached_variants = cached_magic.get(frame_index)
+        if cached_variants:
+            for variant in variants.values():
+                variant_key = str(variant["key"])
+                cached = cached_variants[variant_key]
+                cached_entry = cached["entry"]
+                frames_dir = Path(variant["frames_dir"])
+                processed_path = frames_dir / frame_name
+                shutil.copy2(cached["path"], processed_path)
+                processed_bytes = processed_path.stat().st_size
+                frame_width = safe_int(cached_entry.get("width"), 0)
+                frame_height = safe_int(cached_entry.get("height"), 0)
+                if frame_width <= 0 or frame_height <= 0:
+                    with Image.open(processed_path) as frame:
+                        frame_width, frame_height = frame.size
+                variant["bytes"] += processed_bytes
+                variant["frame_count"] += 1
+                variant["max_width"] = max(int(variant["max_width"]), frame_width)
+                variant["max_height"] = max(int(variant["max_height"]), frame_height)
+                variant["frames"].append(
+                    {
+                        "index": output_index - 1,
+                        "source_index": frame_index,
+                        "name": frame_name,
+                        "original_name": entry.get("original_name") or entry.get("name") or frame_name,
+                        "url": f"/work/magic/{root.name}/{frames_dir.name}/{frame_name}",
+                        "width": frame_width,
+                        "height": frame_height,
+                        "bytes": processed_bytes,
+                        "cached": True,
+                    }
+                )
+            reused_count += 1
+            continue
+
         with Image.open(source_path) as image:
             source_rgba = image.convert("RGBA")
         upscaled_frame, source_size = build_magic_upscaled_frame(source_rgba, ai_input_path, ai_output_path)
+        generated_count += 1
 
         for variant in variants.values():
             frames_dir = Path(variant["frames_dir"])
@@ -3340,6 +3438,7 @@ def magic_preview_job(
                     "width": magic_frame.width,
                     "height": magic_frame.height,
                     "bytes": processed_bytes,
+                    "cached": False,
                 }
             )
             magic_frame.close()
@@ -3365,6 +3464,8 @@ def magic_preview_job(
         "bytes": int(primary["bytes"]),
         "frames": primary["frames"],
         "variants": variants,
+        "generated_count": generated_count,
+        "reused_count": reused_count,
         "created_at": iso_now(),
     }
     (root / "manifest.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -3404,9 +3505,7 @@ def export_magic_frames(
 ) -> dict:
     manifest = load_magic_manifest(magic_id)
     variant = magic_manifest_variant(manifest, variant_key)
-    source_dir = Path(str(variant.get("frames_dir") or ""))
-    if not source_dir.is_absolute():
-        source_dir = MAGIC_DIR / f"{manifest['magic_id']}-magic" / str(source_dir)
+    source_dir = resolve_magic_variant_dir(manifest, variant)
     if not source_dir.exists():
         raise FileNotFoundError(f"MAGIC frames not found: {manifest['magic_id']}")
 
@@ -3742,13 +3841,19 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "export": result})
                 return
             if parsed.path == "/api/magic-preview":
+                if not MAGIC_PREVIEW_LOCK.acquire(blocking=False):
+                    self.send_error_json("MAGIC 正在处理，请等当前任务结束后再点。", HTTPStatus.CONFLICT)
+                    return
                 payload = self.read_json_body()
-                result = magic_preview_job(
-                    job_id=str(payload.get("job_id") or ""),
-                    selected_indices=[safe_int(value, -1) for value in (payload.get("selected_indices") or [])],
-                    resize_mode=str(payload.get("resize_mode") or MAGIC_RESIZE_MODE_DEFAULT),
-                )
-                self.send_json({"ok": True, "magic": result})
+                try:
+                    result = magic_preview_job(
+                        job_id=str(payload.get("job_id") or ""),
+                        selected_indices=[safe_int(value, -1) for value in (payload.get("selected_indices") or [])],
+                        resize_mode=str(payload.get("resize_mode") or MAGIC_RESIZE_MODE_DEFAULT),
+                    )
+                    self.send_json({"ok": True, "magic": result})
+                finally:
+                    MAGIC_PREVIEW_LOCK.release()
                 return
             if parsed.path == "/api/export-magic-frames":
                 payload = self.read_json_body()

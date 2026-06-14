@@ -1198,6 +1198,42 @@ button:focus-visible,
   top: 8px;
   right: 8px;
   z-index: 1;
+  min-width: 18px;
+  min-height: 18px;
+}
+
+.frame-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.frame-check.ordered input {
+  opacity: 0;
+}
+
+.frame-check.ordered input:focus-visible + .frame-order-number {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.frame-order-number {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  place-items: center;
+  border: 2px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  pointer-events: none;
+  transform: translate(2px, -2px);
 }
 
 .frame-meta {
@@ -1206,6 +1242,16 @@ button:focus-visible,
   min-width: 0;
   color: var(--muted);
   font-size: 11px;
+}
+
+.ordered-selection-toggle {
+  min-height: 36px;
+  padding: 0 8px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  font-size: 13px;
+  font-weight: 900;
 }
 
 .frame-meta span {
