@@ -407,7 +407,7 @@ function bindEvents() {
     renderFrames();
   });
   els.orderedSelectionInput.addEventListener("change", () => {
-    state.orderedSelectionMode = els.orderedSelectionInput.checked;
+    setOrderedSelectionMode(els.orderedSelectionInput.checked);
     normalizeSelectionOrder();
     state.preview.currentIndex = 0;
     clearMagicPreview();
@@ -1053,7 +1053,6 @@ function persistSession() {
       exportResult: state.exportResult,
       processPreview: state.processPreview,
       selectedIndices: Array.from(state.selected).sort((a, b) => a - b),
-      orderedSelectionMode: state.orderedSelectionMode,
       selectionOrder,
       preview: {
         isPlaying: state.preview.isPlaying,
@@ -1086,10 +1085,7 @@ function restoreSessionFromStorage() {
     return;
   }
 
-  state.orderedSelectionMode = Boolean(snapshot.orderedSelectionMode);
-  if (els.orderedSelectionInput) {
-    els.orderedSelectionInput.checked = state.orderedSelectionMode;
-  }
+  setOrderedSelectionMode(false);
 
   if (!snapshot.upload && !snapshot.job?.frames) {
     if (snapshot?.form) {
@@ -1490,6 +1486,7 @@ async function importCustomAnimationFrames(files, button) {
     clearMagicPreview();
     state.selected = new Set(data.job.frames.map((frame) => frame.index));
     state.selectionOrder = data.job.frames.map((frame) => frame.index);
+    setOrderedSelectionMode(false);
     state.preview.currentIndex = 0;
     state.preview.isPlaying = true;
     els.previewReverseInput.checked = state.preview.isReversed;
@@ -1510,6 +1507,7 @@ function clearPreviewFrames() {
   clearMagicPreview();
   state.selected = new Set();
   state.selectionOrder = [];
+  setOrderedSelectionMode(false);
   els.jobSummary.innerHTML = "";
   els.frameGrid.innerHTML = "";
   els.exportResult.hidden = true;
@@ -1563,6 +1561,7 @@ function applyUpload(upload, { resetSizing = true } = {}) {
   clearMagicPreview();
   state.selected = new Set();
   state.selectionOrder = [];
+  setOrderedSelectionMode(false);
   if (resetSizing) {
     resetSizingControlsForNewUpload();
   }
@@ -1948,6 +1947,7 @@ async function processVideo() {
     clearMagicPreview();
     state.selected = new Set(data.job.frames.map((frame) => frame.index));
     state.selectionOrder = data.job.frames.map((frame) => frame.index);
+    setOrderedSelectionMode(false);
     state.preview.currentIndex = 0;
     renderJob();
     setStatus(
@@ -2281,6 +2281,13 @@ function refreshCardSelection(index, checked) {
   const card = els.frameGrid.querySelector(`.frame-card[data-index="${index}"]`);
   if (card) {
     card.classList.toggle("selected", checked);
+  }
+}
+
+function setOrderedSelectionMode(enabled) {
+  state.orderedSelectionMode = Boolean(enabled);
+  if (els.orderedSelectionInput) {
+    els.orderedSelectionInput.checked = state.orderedSelectionMode;
   }
 }
 
@@ -3057,7 +3064,7 @@ async function exportMagicFrames(variantKey = "half", button = els.exportMagicFr
     renderExportResult();
     const frameCount = Number(data.export?.frame_count || 0);
     const outputSize = formatMagicOutputSize(data.export);
-    setStatus(`${config.label} \u5904\u7406\u540E\u5E27\u5DF2\u5BFC\u51FA\uFF1A${frameCount} \u5E27\uFF0C\u753B\u5E03 ${outputSize}\uFF0C\u5DF2\u751F\u6210\u900F\u660E WebM\u3002`, "success");
+    setStatus(`${config.label} \u5904\u7406\u540E\u5E27\u5DF2\u5BFC\u51FA\uFF1A${frameCount} \u5E27\uFF0C\u753B\u5E03 ${outputSize}\uFF0C\u5DF2\u751F\u6210 WebM\u3001\u900F\u660E MOV \u548C GIF\u3002`, "success");
   });
 }
 
@@ -3097,19 +3104,23 @@ function renderExportResult() {
   }
 
   els.exportResult.hidden = false;
-  const videoName = escapeHtml(state.exportResult.video_name || "animation.webm");
-  const videoLink = state.exportResult.video_url
-    ? `<a href="${state.exportResult.video_url}" target="_blank" rel="noopener">${videoName}</a>`
-    : "";
+  const mediaLinks = [
+    ["WebM", state.exportResult.webm_url || state.exportResult.video_url, state.exportResult.webm_name || state.exportResult.video_name],
+    ["MOV", state.exportResult.mov_url, state.exportResult.mov_name],
+    ["GIF", state.exportResult.gif_url, state.exportResult.gif_name],
+  ]
+    .filter(([, url]) => Boolean(url))
+    .map(([label, url, name]) => `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${label}: ${escapeHtml(name || url)}</a>`)
+    .join("");
 
   els.exportResult.innerHTML = `
     <div class="result-summary">
       ${summaryCard("\u5bfc\u51fa\u5e27\u6570", `${state.exportResult.frame_count} \u5e27`)}
-      ${summaryCard("\u5bfc\u51fa\u5185\u5bb9", "frames \u6587\u4ef6\u5939 / \u900f\u660e WebM")}
+      ${summaryCard("\u5bfc\u51fa\u5185\u5bb9", "frames \u6587\u4ef6\u5939 / WebM / \u900f\u660e MOV / GIF")}
     </div>
     <div class="link-list">
       <button id="openFramesDirButton" class="ghost-button" type="button">\u6253\u5f00 frames \u6587\u4ef6\u5939</button>
-      ${videoLink}
+      ${mediaLinks}
     </div>
   `;
 

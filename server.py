@@ -3261,6 +3261,26 @@ def process_line_cleaner_frames(
     return manifest
 
 
+def write_aligned_rgba_video_frames(
+    frame_paths: list[Path],
+    frame_sizes: list[tuple[int, int]],
+    target_dir: Path,
+    cell_width: int,
+    cell_height: int,
+) -> None:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for index, frame_path in enumerate(frame_paths, start=1):
+        frame = open_rgba_image(frame_path)
+        frame_width, frame_height = frame_sizes[index - 1]
+        canvas = Image.new("RGBA", (cell_width, cell_height), (0, 0, 0, 0))
+        offset_x = (cell_width - frame_width) // 2
+        offset_y = (cell_height - frame_height) // 2
+        canvas.paste(frame, (offset_x, offset_y), frame)
+        frame.close()
+        canvas.save(target_dir / f"frame_{index:03d}.png")
+        canvas.close()
+
+
 def save_alpha_webm(
     frame_paths: list[Path],
     frame_sizes: list[tuple[int, int]],
@@ -3278,17 +3298,7 @@ def save_alpha_webm(
         shutil.rmtree(video_frames_dir)
     video_frames_dir.mkdir(parents=True, exist_ok=True)
     try:
-        for index, frame_path in enumerate(frame_paths, start=1):
-            frame = open_rgba_image(frame_path)
-            frame_width, frame_height = frame_sizes[index - 1]
-            canvas = Image.new("RGBA", (cell_width, cell_height), (0, 0, 0, 0))
-            offset_x = (cell_width - frame_width) // 2
-            offset_y = (cell_height - frame_height) // 2
-            canvas.paste(frame, (offset_x, offset_y), frame)
-            frame.close()
-            canvas.save(video_frames_dir / f"frame_{index:03d}.png")
-            canvas.close()
-
+        write_aligned_rgba_video_frames(frame_paths, frame_sizes, video_frames_dir, cell_width, cell_height)
         input_pattern = video_frames_dir / "frame_%03d.png"
         run_process(
             [
@@ -3316,6 +3326,113 @@ def save_alpha_webm(
         )
     finally:
         shutil.rmtree(video_frames_dir, ignore_errors=True)
+
+
+def save_alpha_mov(
+    frame_paths: list[Path],
+    frame_sizes: list[tuple[int, int]],
+    output_path: Path,
+    cell_width: int,
+    cell_height: int,
+    duration_ms: int,
+) -> None:
+    if not frame_paths:
+        raise ValueError("no frames selected for alpha video export")
+    ffmpeg = resolve_ffmpeg_binary("ffmpeg")
+    duration_ms = clamp_int(duration_ms, 20, 5000)
+    video_frames_dir = output_path.parent / "mov_frames_tmp"
+    if video_frames_dir.exists():
+        shutil.rmtree(video_frames_dir)
+    try:
+        write_aligned_rgba_video_frames(frame_paths, frame_sizes, video_frames_dir, cell_width, cell_height)
+        input_pattern = video_frames_dir / "frame_%03d.png"
+        run_process(
+            [
+                ffmpeg,
+                "-y",
+                "-framerate",
+                f"1000/{duration_ms}",
+                "-start_number",
+                "1",
+                "-i",
+                str(input_pattern),
+                "-frames:v",
+                str(len(frame_paths)),
+                "-c:v",
+                "qtrle",
+                "-pix_fmt",
+                "argb",
+                "-an",
+                str(output_path),
+            ]
+        )
+    finally:
+        shutil.rmtree(video_frames_dir, ignore_errors=True)
+
+
+def save_gif(
+    frame_paths: list[Path],
+    frame_sizes: list[tuple[int, int]],
+    output_path: Path,
+    cell_width: int,
+    cell_height: int,
+    duration_ms: int,
+) -> None:
+    if not frame_paths:
+        raise ValueError("no frames selected for GIF export")
+    ffmpeg = resolve_ffmpeg_binary("ffmpeg")
+    duration_ms = clamp_int(duration_ms, 20, 5000)
+    video_frames_dir = output_path.parent / "gif_frames_tmp"
+    palette_path = output_path.parent / f"{output_path.stem}-palette.png"
+    if video_frames_dir.exists():
+        shutil.rmtree(video_frames_dir)
+    if palette_path.exists():
+        palette_path.unlink()
+    try:
+        write_aligned_rgba_video_frames(frame_paths, frame_sizes, video_frames_dir, cell_width, cell_height)
+        input_pattern = video_frames_dir / "frame_%03d.png"
+        run_process(
+            [
+                ffmpeg,
+                "-y",
+                "-framerate",
+                f"1000/{duration_ms}",
+                "-start_number",
+                "1",
+                "-i",
+                str(input_pattern),
+                "-frames:v",
+                str(len(frame_paths)),
+                "-vf",
+                "palettegen=reserve_transparent=1:transparency_color=000000",
+                str(palette_path),
+            ]
+        )
+        run_process(
+            [
+                ffmpeg,
+                "-y",
+                "-framerate",
+                f"1000/{duration_ms}",
+                "-start_number",
+                "1",
+                "-i",
+                str(input_pattern),
+                "-i",
+                str(palette_path),
+                "-frames:v",
+                str(len(frame_paths)),
+                "-lavfi",
+                "paletteuse=alpha_threshold=128",
+                "-loop",
+                "0",
+                str(output_path),
+            ]
+        )
+    finally:
+        shutil.rmtree(video_frames_dir, ignore_errors=True)
+        if palette_path.exists():
+            palette_path.unlink()
 
 
 def magic_preview_job(
@@ -3539,15 +3656,25 @@ def export_magic_frames(
         frame.close()
 
     video_duration_ms = clamp_int(video_duration_ms, 20, 5000)
-    video_name = f"magic-{variant_key}-{datetime.now():%Y%m%d-%H%M%S}.webm"
-    video_path = target_dir / video_name
-    save_alpha_webm(copied_paths, frame_sizes, video_path, cell_width, cell_height, video_duration_ms)
+    timestamp = f"{datetime.now():%Y%m%d-%H%M%S}"
+    webm_name = f"magic-{variant_key}-{timestamp}.webm"
+    mov_name = f"magic-{variant_key}-{timestamp}.mov"
+    gif_name = f"magic-{variant_key}-{timestamp}.gif"
+    save_alpha_webm(copied_paths, frame_sizes, target_dir / webm_name, cell_width, cell_height, video_duration_ms)
+    save_alpha_mov(copied_paths, frame_sizes, target_dir / mov_name, cell_width, cell_height, video_duration_ms)
+    save_gif(copied_paths, frame_sizes, target_dir / gif_name, cell_width, cell_height, video_duration_ms)
 
     result = {
         "output_dir": str(target_dir),
         "frames_dir": str(frames_dir),
-        "video_name": video_name,
-        "video_url": f"/work/exports/{target_dir.name}/{video_name}",
+        "video_name": webm_name,
+        "video_url": f"/work/exports/{target_dir.name}/{webm_name}",
+        "webm_name": webm_name,
+        "webm_url": f"/work/exports/{target_dir.name}/{webm_name}",
+        "mov_name": mov_name,
+        "mov_url": f"/work/exports/{target_dir.name}/{mov_name}",
+        "gif_name": gif_name,
+        "gif_url": f"/work/exports/{target_dir.name}/{gif_name}",
         "frame_count": copied_count,
         "max_width": variant.get("max_width") or 0,
         "max_height": variant.get("max_height") or 0,
@@ -3599,15 +3726,25 @@ def export_job(job_id: str, selected_indices: list[int], video_duration_ms: int)
         frame.close()
 
     video_duration_ms = clamp_int(video_duration_ms, 20, 5000)
-    video_name = f"animation-{datetime.now():%Y%m%d-%H%M%S}.webm"
-    video_path = target_dir / video_name
-    save_alpha_webm(copied_paths, frame_sizes, video_path, cell_width, cell_height, video_duration_ms)
+    timestamp = f"{datetime.now():%Y%m%d-%H%M%S}"
+    webm_name = f"animation-{timestamp}.webm"
+    mov_name = f"animation-{timestamp}.mov"
+    gif_name = f"animation-{timestamp}.gif"
+    save_alpha_webm(copied_paths, frame_sizes, target_dir / webm_name, cell_width, cell_height, video_duration_ms)
+    save_alpha_mov(copied_paths, frame_sizes, target_dir / mov_name, cell_width, cell_height, video_duration_ms)
+    save_gif(copied_paths, frame_sizes, target_dir / gif_name, cell_width, cell_height, video_duration_ms)
 
     return {
         "output_dir": str(target_dir),
         "frames_dir": str(frames_dir),
-        "video_name": video_name,
-        "video_url": f"/work/exports/{target_dir.name}/{video_name}",
+        "video_name": webm_name,
+        "video_url": f"/work/exports/{target_dir.name}/{webm_name}",
+        "webm_name": webm_name,
+        "webm_url": f"/work/exports/{target_dir.name}/{webm_name}",
+        "mov_name": mov_name,
+        "mov_url": f"/work/exports/{target_dir.name}/{mov_name}",
+        "gif_name": gif_name,
+        "gif_url": f"/work/exports/{target_dir.name}/{gif_name}",
         "frame_count": len(copied_paths),
         "video_duration_ms": video_duration_ms,
     }
