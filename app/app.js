@@ -114,6 +114,7 @@ document.addEventListener("DOMContentLoaded", () => {
   updateSegmentConfirmationUI();
   showAnimationWorkbench();
   setStatus("\u7B49\u5F85\u5BFC\u5165\u7D20\u6750\u3002");
+  void loadOutputPath();
   restoreSessionFromStorage();
   enforceAutomaticAiSettings(false);
   startHotReloadPolling();
@@ -124,6 +125,8 @@ function bindElements() {
   [
     "pathInput",
     "importPathButton",
+    "outputPathInput",
+    "saveOutputPathButton",
     "uploadDropzone",
     "uploadInput",
     "videoName",
@@ -304,6 +307,7 @@ function setMagicResizeMode(mode, { clearExisting = true } = {}) {
 
 function bindEvents() {
   els.importPathButton.addEventListener("click", importFromPath);
+  els.saveOutputPathButton.addEventListener("click", selectOutputPath);
   els.uploadInput.addEventListener("change", handleUploadInputChange);
   els.previewFrameButton.addEventListener("click", previewCurrentFrame);
   els.greenToBlackButton.addEventListener("click", applyGreenToBlackPreview);
@@ -1396,6 +1400,36 @@ async function importFromPath() {
     });
     applyUpload(data.upload);
     setStatus(`\u5df2\u5bfc\u5165 ${data.upload.display_name}\u3002`, "success");
+  });
+}
+
+function renderOutputPath(payload) {
+  if (!els.outputPathInput || !payload) {
+    return;
+  }
+  els.outputPathInput.value = payload.path || "";
+  els.outputPathInput.placeholder = payload.default_path || "D:\\sprite-video-lab-exports";
+}
+
+async function loadOutputPath() {
+  try {
+    const data = await apiJson("/api/output-path");
+    renderOutputPath(data.output_path);
+  } catch (error) {
+    console.warn("loadOutputPath failed", error);
+  }
+}
+
+async function selectOutputPath() {
+  await withBusy(els.saveOutputPathButton, async () => {
+    setStatus("\u8BF7\u5728\u5F39\u51FA\u7A97\u53E3\u91CC\u9009\u62E9\u8F93\u51FA\u6587\u4EF6\u5939...");
+    const data = await apiJson("/api/select-output-path", { method: "POST" });
+    renderOutputPath(data.output_path);
+    if (data.cancelled) {
+      setStatus("\u5DF2\u53D6\u6D88\u8BBE\u7F6E\u8F93\u51FA\u8DEF\u5F84\u3002");
+      return;
+    }
+    setStatus(`\u8F93\u51FA\u8DEF\u5F84\u5DF2\u8BBE\u7F6E\uFF1A${data.output_path.path}`, "success");
   });
 }
 
@@ -3064,7 +3098,7 @@ async function exportMagicFrames(variantKey = "half", button = els.exportMagicFr
     renderExportResult();
     const frameCount = Number(data.export?.frame_count || 0);
     const outputSize = formatMagicOutputSize(data.export);
-    setStatus(`${config.label} \u5904\u7406\u540E\u5E27\u5DF2\u5BFC\u51FA\uFF1A${frameCount} \u5E27\uFF0C\u753B\u5E03 ${outputSize}\uFF0C\u5DF2\u751F\u6210 WebM\u3001\u900F\u660E MOV \u548C GIF\u3002`, "success");
+    setStatus(`${config.label} \u5904\u7406\u540E\u5E27\u5DF2\u5BFC\u51FA\uFF1A${frameCount} \u5E27\uFF0C MOV \u786C\u8FB9\u7F18\u653E\u5927\u56DE ${outputSize}\uFF0C\u5DF2\u751F\u6210\u900F\u660E MOV\u3001GIF \u548C Sprite Sheet\u3002`, "success");
   });
 }
 
@@ -3105,21 +3139,24 @@ function renderExportResult() {
 
   els.exportResult.hidden = false;
   const mediaLinks = [
-    ["WebM", state.exportResult.webm_url || state.exportResult.video_url, state.exportResult.webm_name || state.exportResult.video_name],
-    ["MOV", state.exportResult.mov_url, state.exportResult.mov_name],
+    ["MOV", state.exportResult.mov_url || state.exportResult.video_url, state.exportResult.mov_name || state.exportResult.video_name],
     ["GIF", state.exportResult.gif_url, state.exportResult.gif_name],
   ]
     .filter(([, url]) => Boolean(url))
     .map(([label, url, name]) => `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${label}: ${escapeHtml(name || url)}</a>`)
     .join("");
+  const sheetButton = state.exportResult.sheet_dir
+    ? `<button id="openSheetDirButton" class="ghost-button" type="button">\u6253\u5F00 Sprite Sheet + JSON</button>`
+    : "";
 
   els.exportResult.innerHTML = `
     <div class="result-summary">
       ${summaryCard("\u5bfc\u51fa\u5e27\u6570", `${state.exportResult.frame_count} \u5e27`)}
-      ${summaryCard("\u5bfc\u51fa\u5185\u5bb9", "frames \u6587\u4ef6\u5939 / WebM / \u900f\u660e MOV / GIF")}
+      ${summaryCard("\u5bfc\u51fa\u5185\u5bb9", "frames \u6587\u4ef6\u5939 / \u900f\u660e MOV / GIF / Sprite Sheet + JSON")}
     </div>
     <div class="link-list">
       <button id="openFramesDirButton" class="ghost-button" type="button">\u6253\u5f00 frames \u6587\u4ef6\u5939</button>
+      ${sheetButton}
       ${mediaLinks}
     </div>
   `;
@@ -3128,6 +3165,12 @@ function renderExportResult() {
   if (openFramesDirButton) {
     openFramesDirButton.addEventListener("click", async () => {
       await openPath(state.exportResult.frames_dir || state.exportResult.output_dir);
+    });
+  }
+  const openSheetDirButton = document.getElementById("openSheetDirButton");
+  if (openSheetDirButton) {
+    openSheetDirButton.addEventListener("click", async () => {
+      await openPath(state.exportResult.sheet_dir);
     });
   }
   persistSession();

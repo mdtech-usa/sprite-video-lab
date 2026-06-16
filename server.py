@@ -32,6 +32,7 @@ EXPORTS_DIR = WORK_DIR / "exports"
 PREVIEWS_DIR = WORK_DIR / "previews"
 LINE_CLEANER_DIR = WORK_DIR / "line-cleaner"
 MAGIC_DIR = WORK_DIR / "magic"
+SETTINGS_PATH = WORK_DIR / "settings.json"
 MAGIC_PREVIEW_LOCK = threading.Lock()
 
 DEFAULT_HOST = "127.0.0.1"
@@ -147,6 +148,107 @@ _CORRIDORKEY_ENGINE_CACHE: dict[tuple[str, str], object] = {}
 def ensure_runtime_dirs() -> None:
     for directory in (APP_DIR, WORK_DIR, UPLOADS_DIR, JOBS_DIR, EXPORTS_DIR, PREVIEWS_DIR, LINE_CLEANER_DIR, MAGIC_DIR):
         directory.mkdir(parents=True, exist_ok=True)
+
+
+def load_app_settings() -> dict:
+    try:
+        if SETTINGS_PATH.exists():
+            return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {}
+
+
+def save_app_settings(settings: dict) -> None:
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def configured_exports_dir() -> Path:
+    settings = load_app_settings()
+    raw = str(settings.get("export_root") or "").strip()
+    if not raw:
+        return EXPORTS_DIR.resolve()
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = (ROOT_DIR / path).resolve()
+    return path.resolve()
+
+
+def export_url(target_dir: Path, filename: str) -> str:
+    return f"/exports/{target_dir.name}/{filename}"
+
+
+def output_path_payload() -> dict:
+    settings = load_app_settings()
+    raw = str(settings.get("export_root") or "").strip()
+    path = configured_exports_dir()
+    default_path = EXPORTS_DIR.resolve()
+    return {
+        "path": str(path),
+        "is_default": not raw or path == default_path,
+        "default_path": str(default_path),
+    }
+
+
+def set_output_path(raw_path: str) -> dict:
+    raw = str(raw_path or "").strip().strip("\"'")
+    settings = load_app_settings()
+    if not raw:
+        settings.pop("export_root", None)
+        EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        save_app_settings(settings)
+        return output_path_payload()
+
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = (ROOT_DIR / path).resolve()
+    path = path.resolve()
+    if path.exists() and not path.is_dir():
+        raise ValueError(f"output path is not a folder: {path}")
+    path.mkdir(parents=True, exist_ok=True)
+    if path == EXPORTS_DIR.resolve():
+        settings.pop("export_root", None)
+        save_app_settings(settings)
+        return output_path_payload()
+    settings["export_root"] = str(path)
+    save_app_settings(settings)
+    return output_path_payload()
+
+
+def choose_output_path() -> dict:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:
+        raise RuntimeError("folder picker is unavailable on this Python runtime") from exc
+
+    current_path = configured_exports_dir()
+    initial_dir = current_path if current_path.exists() else EXPORTS_DIR.resolve()
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        root.attributes("-topmost", True)
+    except tk.TclError:
+        pass
+    try:
+        selected = filedialog.askdirectory(
+            parent=root,
+            title="选择 Sprite Video Lab 输出路径",
+            initialdir=str(initial_dir),
+            mustexist=False,
+        )
+    finally:
+        root.destroy()
+
+    if not selected:
+        payload = output_path_payload()
+        payload["cancelled"] = True
+        return payload
+
+    payload = set_output_path(selected)
+    payload["cancelled"] = False
+    return payload
 
 
 def configured_host(cli_host: str | None = None) -> str:
@@ -3267,11 +3369,18 @@ def write_aligned_rgba_video_frames(
     target_dir: Path,
     cell_width: int,
     cell_height: int,
+    render_sizes: list[tuple[int, int]] | None = None,
+    resize_resample: Image.Resampling = NEAREST,
 ) -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
     for index, frame_path in enumerate(frame_paths, start=1):
         frame = open_rgba_image(frame_path)
-        frame_width, frame_height = frame_sizes[index - 1]
+        render_size = render_sizes[index - 1] if render_sizes else frame_sizes[index - 1]
+        frame_width, frame_height = render_size
+        if frame.size != render_size:
+            resized = frame.resize(render_size, resize_resample)
+            frame.close()
+            frame = resized
         canvas = Image.new("RGBA", (cell_width, cell_height), (0, 0, 0, 0))
         offset_x = (cell_width - frame_width) // 2
         offset_y = (cell_height - frame_height) // 2
@@ -3281,53 +3390,6 @@ def write_aligned_rgba_video_frames(
         canvas.close()
 
 
-def save_alpha_webm(
-    frame_paths: list[Path],
-    frame_sizes: list[tuple[int, int]],
-    output_path: Path,
-    cell_width: int,
-    cell_height: int,
-    duration_ms: int,
-) -> None:
-    if not frame_paths:
-        raise ValueError("no frames selected for alpha video export")
-    ffmpeg = resolve_ffmpeg_binary("ffmpeg")
-    duration_ms = clamp_int(duration_ms, 20, 5000)
-    video_frames_dir = output_path.parent / "video_frames_tmp"
-    if video_frames_dir.exists():
-        shutil.rmtree(video_frames_dir)
-    video_frames_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        write_aligned_rgba_video_frames(frame_paths, frame_sizes, video_frames_dir, cell_width, cell_height)
-        input_pattern = video_frames_dir / "frame_%03d.png"
-        run_process(
-            [
-                ffmpeg,
-                "-y",
-                "-framerate",
-                f"1000/{duration_ms}",
-                "-start_number",
-                "1",
-                "-i",
-                str(input_pattern),
-                "-frames:v",
-                str(len(frame_paths)),
-                "-c:v",
-                "libvpx-vp9",
-                "-lossless",
-                "1",
-                "-auto-alt-ref",
-                "0",
-                "-pix_fmt",
-                "yuva420p",
-                "-an",
-                str(output_path),
-            ]
-        )
-    finally:
-        shutil.rmtree(video_frames_dir, ignore_errors=True)
-
-
 def save_alpha_mov(
     frame_paths: list[Path],
     frame_sizes: list[tuple[int, int]],
@@ -3335,6 +3397,7 @@ def save_alpha_mov(
     cell_width: int,
     cell_height: int,
     duration_ms: int,
+    render_sizes: list[tuple[int, int]] | None = None,
 ) -> None:
     if not frame_paths:
         raise ValueError("no frames selected for alpha video export")
@@ -3344,7 +3407,15 @@ def save_alpha_mov(
     if video_frames_dir.exists():
         shutil.rmtree(video_frames_dir)
     try:
-        write_aligned_rgba_video_frames(frame_paths, frame_sizes, video_frames_dir, cell_width, cell_height)
+        write_aligned_rgba_video_frames(
+            frame_paths,
+            frame_sizes,
+            video_frames_dir,
+            cell_width,
+            cell_height,
+            render_sizes=render_sizes,
+            resize_resample=NEAREST,
+        )
         input_pattern = video_frames_dir / "frame_%03d.png"
         run_process(
             [
@@ -3433,6 +3504,82 @@ def save_gif(
         shutil.rmtree(video_frames_dir, ignore_errors=True)
         if palette_path.exists():
             palette_path.unlink()
+
+
+def save_sprite_sheet(
+    frame_paths: list[Path],
+    frame_sizes: list[tuple[int, int]],
+    sheet_path: Path,
+    metadata_path: Path,
+    cell_width: int,
+    cell_height: int,
+    duration_ms: int,
+) -> dict:
+    if not frame_paths:
+        raise ValueError("no frames selected for sprite sheet export")
+
+    frame_count = len(frame_paths)
+    columns = max(1, math.ceil(math.sqrt(frame_count)))
+    rows = max(1, math.ceil(frame_count / columns))
+    sheet_width = columns * cell_width
+    sheet_height = rows * cell_height
+    sheet = Image.new("RGBA", (sheet_width, sheet_height), (0, 0, 0, 0))
+    frames: list[dict] = []
+
+    try:
+        for index, frame_path in enumerate(frame_paths):
+            frame = open_rgba_image(frame_path)
+            frame_width, frame_height = frame_sizes[index]
+            column = index % columns
+            row = index // columns
+            cell_x = column * cell_width
+            cell_y = row * cell_height
+            offset_x = cell_x + (cell_width - frame_width) // 2
+            offset_y = cell_y + (cell_height - frame_height) // 2
+            sheet.paste(frame, (offset_x, offset_y), frame)
+            frame.close()
+            frames.append(
+                {
+                    "index": index,
+                    "name": frame_path.name,
+                    "duration_ms": duration_ms,
+                    "frame": {
+                        "x": cell_x,
+                        "y": cell_y,
+                        "w": cell_width,
+                        "h": cell_height,
+                    },
+                    "sprite": {
+                        "x": offset_x,
+                        "y": offset_y,
+                        "w": frame_width,
+                        "h": frame_height,
+                    },
+                    "source_size": {
+                        "w": frame_width,
+                        "h": frame_height,
+                    },
+                }
+            )
+        sheet.save(sheet_path, optimize=True, compress_level=9)
+    finally:
+        sheet.close()
+
+    metadata = {
+        "image": sheet_path.name,
+        "format": "fixed-grid",
+        "frame_count": frame_count,
+        "columns": columns,
+        "rows": rows,
+        "cell_width": cell_width,
+        "cell_height": cell_height,
+        "width": sheet_width,
+        "height": sheet_height,
+        "duration_ms": duration_ms,
+        "frames": frames,
+    }
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    return metadata
 
 
 def magic_preview_job(
@@ -3621,18 +3768,29 @@ def export_magic_frames(
     video_duration_ms: int = 100,
 ) -> dict:
     manifest = load_magic_manifest(magic_id)
+    job_manifest = load_job_manifest(str(manifest.get("job_id") or ""))
+    job_frame_sizes = {
+        entry["index"]: (
+            safe_int(entry.get("width"), 0),
+            safe_int(entry.get("height"), 0),
+        )
+        for entry in job_manifest.get("frames") or []
+    }
     variant = magic_manifest_variant(manifest, variant_key)
     source_dir = resolve_magic_variant_dir(manifest, variant)
     if not source_dir.exists():
         raise FileNotFoundError(f"MAGIC frames not found: {manifest['magic_id']}")
 
     variant_key = str(variant.get("key") or "half")
-    target_dir = EXPORTS_DIR / f"{timestamped_id()}-magic-{variant_key}-frames"
+    target_dir = configured_exports_dir() / f"{timestamped_id()}-magic-{variant_key}-frames"
     frames_dir = target_dir / "frames"
+    sheet_dir = target_dir / "sprite-sheet"
     frames_dir.mkdir(parents=True, exist_ok=True)
+    sheet_dir.mkdir(parents=True, exist_ok=True)
 
     copied_count = 0
     copied_paths: list[Path] = []
+    mov_frame_sizes: list[tuple[int, int]] = []
     for output_index, entry in enumerate(variant.get("frames") or [], start=1):
         source_path = source_dir / str(entry.get("name") or "")
         if not source_path.exists():
@@ -3641,6 +3799,13 @@ def export_magic_frames(
         shutil.copy2(source_path, target_path)
         copied_count += 1
         copied_paths.append(target_path)
+        source_size = job_frame_sizes.get(safe_int(entry.get("source_index"), -1))
+        if not source_size or source_size[0] <= 0 or source_size[1] <= 0:
+            source_size = (
+                max(1, round(safe_int(entry.get("width"), 1) / max(float(variant.get("scale") or 1), 0.0001))),
+                max(1, round(safe_int(entry.get("height"), 1) / max(float(variant.get("scale") or 1), 0.0001))),
+            )
+        mov_frame_sizes.append(source_size)
 
     if copied_count <= 0:
         raise ValueError("no MAGIC frames exported")
@@ -3657,27 +3822,55 @@ def export_magic_frames(
 
     video_duration_ms = clamp_int(video_duration_ms, 20, 5000)
     timestamp = f"{datetime.now():%Y%m%d-%H%M%S}"
-    webm_name = f"magic-{variant_key}-{timestamp}.webm"
     mov_name = f"magic-{variant_key}-{timestamp}.mov"
     gif_name = f"magic-{variant_key}-{timestamp}.gif"
-    save_alpha_webm(copied_paths, frame_sizes, target_dir / webm_name, cell_width, cell_height, video_duration_ms)
-    save_alpha_mov(copied_paths, frame_sizes, target_dir / mov_name, cell_width, cell_height, video_duration_ms)
+    sheet_name = "sheet.png"
+    sheet_json_name = "sheet.json"
+    mov_cell_width = max(width for width, _height in mov_frame_sizes)
+    mov_cell_height = max(height for _width, height in mov_frame_sizes)
+    save_alpha_mov(
+        copied_paths,
+        frame_sizes,
+        target_dir / mov_name,
+        mov_cell_width,
+        mov_cell_height,
+        video_duration_ms,
+        render_sizes=mov_frame_sizes,
+    )
     save_gif(copied_paths, frame_sizes, target_dir / gif_name, cell_width, cell_height, video_duration_ms)
+    sheet_metadata = save_sprite_sheet(
+        copied_paths,
+        frame_sizes,
+        sheet_dir / sheet_name,
+        sheet_dir / sheet_json_name,
+        cell_width,
+        cell_height,
+        video_duration_ms,
+    )
 
     result = {
         "output_dir": str(target_dir),
         "frames_dir": str(frames_dir),
-        "video_name": webm_name,
-        "video_url": f"/work/exports/{target_dir.name}/{webm_name}",
-        "webm_name": webm_name,
-        "webm_url": f"/work/exports/{target_dir.name}/{webm_name}",
+        "sheet_dir": str(sheet_dir),
+        "video_name": mov_name,
+        "video_url": export_url(target_dir, mov_name),
         "mov_name": mov_name,
-        "mov_url": f"/work/exports/{target_dir.name}/{mov_name}",
+        "mov_url": export_url(target_dir, mov_name),
         "gif_name": gif_name,
-        "gif_url": f"/work/exports/{target_dir.name}/{gif_name}",
+        "gif_url": export_url(target_dir, gif_name),
+        "sheet_name": sheet_name,
+        "sheet_url": export_url(target_dir, f"sprite-sheet/{sheet_name}"),
+        "sheet_json_name": sheet_json_name,
+        "sheet_json_url": export_url(target_dir, f"sprite-sheet/{sheet_json_name}"),
+        "sheet_columns": sheet_metadata["columns"],
+        "sheet_rows": sheet_metadata["rows"],
+        "sheet_width": sheet_metadata["width"],
+        "sheet_height": sheet_metadata["height"],
         "frame_count": copied_count,
-        "max_width": variant.get("max_width") or 0,
-        "max_height": variant.get("max_height") or 0,
+        "max_width": mov_cell_width,
+        "max_height": mov_cell_height,
+        "gif_width": variant.get("max_width") or 0,
+        "gif_height": variant.get("max_height") or 0,
         "video_duration_ms": video_duration_ms,
         "source_magic_id": manifest.get("magic_id") or magic_id,
         "variant_key": variant_key,
@@ -3693,9 +3886,11 @@ def export_magic_frames(
 def export_job(job_id: str, selected_indices: list[int], video_duration_ms: int) -> dict:
     manifest = load_job_manifest(job_id)
     processed_dir = job_dir(job_id) / "processed"
-    target_dir = EXPORTS_DIR / f"{timestamped_id()}-export"
+    target_dir = configured_exports_dir() / f"{timestamped_id()}-export"
     frames_dir = target_dir / "frames"
+    sheet_dir = target_dir / "sprite-sheet"
     frames_dir.mkdir(parents=True, exist_ok=True)
+    sheet_dir.mkdir(parents=True, exist_ok=True)
 
     frame_map = {entry["index"]: entry for entry in manifest["frames"]}
     seen_indices: set[int] = set()
@@ -3727,24 +3922,40 @@ def export_job(job_id: str, selected_indices: list[int], video_duration_ms: int)
 
     video_duration_ms = clamp_int(video_duration_ms, 20, 5000)
     timestamp = f"{datetime.now():%Y%m%d-%H%M%S}"
-    webm_name = f"animation-{timestamp}.webm"
     mov_name = f"animation-{timestamp}.mov"
     gif_name = f"animation-{timestamp}.gif"
-    save_alpha_webm(copied_paths, frame_sizes, target_dir / webm_name, cell_width, cell_height, video_duration_ms)
+    sheet_name = "sheet.png"
+    sheet_json_name = "sheet.json"
     save_alpha_mov(copied_paths, frame_sizes, target_dir / mov_name, cell_width, cell_height, video_duration_ms)
     save_gif(copied_paths, frame_sizes, target_dir / gif_name, cell_width, cell_height, video_duration_ms)
+    sheet_metadata = save_sprite_sheet(
+        copied_paths,
+        frame_sizes,
+        sheet_dir / sheet_name,
+        sheet_dir / sheet_json_name,
+        cell_width,
+        cell_height,
+        video_duration_ms,
+    )
 
     return {
         "output_dir": str(target_dir),
         "frames_dir": str(frames_dir),
-        "video_name": webm_name,
-        "video_url": f"/work/exports/{target_dir.name}/{webm_name}",
-        "webm_name": webm_name,
-        "webm_url": f"/work/exports/{target_dir.name}/{webm_name}",
+        "sheet_dir": str(sheet_dir),
+        "video_name": mov_name,
+        "video_url": export_url(target_dir, mov_name),
         "mov_name": mov_name,
-        "mov_url": f"/work/exports/{target_dir.name}/{mov_name}",
+        "mov_url": export_url(target_dir, mov_name),
         "gif_name": gif_name,
-        "gif_url": f"/work/exports/{target_dir.name}/{gif_name}",
+        "gif_url": export_url(target_dir, gif_name),
+        "sheet_name": sheet_name,
+        "sheet_url": export_url(target_dir, f"sprite-sheet/{sheet_name}"),
+        "sheet_json_name": sheet_json_name,
+        "sheet_json_url": export_url(target_dir, f"sprite-sheet/{sheet_json_name}"),
+        "sheet_columns": sheet_metadata["columns"],
+        "sheet_rows": sheet_metadata["rows"],
+        "sheet_width": sheet_metadata["width"],
+        "sheet_height": sheet_metadata["height"],
         "frame_count": len(copied_paths),
         "video_duration_ms": video_duration_ms,
     }
@@ -3781,6 +3992,9 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/runtime-info":
             self.send_json({"ok": True, "runtime": runtime_info()})
             return
+        if parsed.path == "/api/output-path":
+            self.send_json({"ok": True, "output_path": output_path_payload()})
+            return
         if parsed.path == "/":
             self.serve_app_file(APP_DIR / "index.html", content_type="text/html; charset=utf-8")
             return
@@ -3795,6 +4009,10 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/work/"):
             relative = parsed.path.removeprefix("/work/")
             self.serve_work_file((WORK_DIR / relative).resolve())
+            return
+        if parsed.path.startswith("/exports/"):
+            relative = parsed.path.removeprefix("/exports/")
+            self.serve_export_file((configured_exports_dir() / relative).resolve())
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -4001,6 +4219,21 @@ class AppHandler(BaseHTTPRequestHandler):
                 )
                 self.send_json({"ok": True, "export": result})
                 return
+            if parsed.path == "/api/output-path":
+                payload = self.read_json_body()
+                result = set_output_path(str(payload.get("path") or ""))
+                self.send_json({"ok": True, "output_path": result})
+                return
+            if parsed.path == "/api/select-output-path":
+                result = choose_output_path()
+                self.send_json(
+                    {
+                        "ok": True,
+                        "output_path": result,
+                        "cancelled": bool(result.get("cancelled")),
+                    }
+                )
+                return
             if parsed.path == "/api/open-path":
                 payload = self.read_json_body()
                 target = Path(str(payload.get("path") or "").strip()).expanduser().resolve()
@@ -4031,6 +4264,13 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def serve_work_file(self, path: Path, content_type: str | None = None, allow_range: bool = False) -> None:
         if not is_within_root(path, WORK_DIR):
+            self.send_error(HTTPStatus.FORBIDDEN)
+            return
+        self.serve_file(path, content_type=content_type, allow_range=allow_range)
+
+    def serve_export_file(self, path: Path, content_type: str | None = None, allow_range: bool = False) -> None:
+        export_root = configured_exports_dir()
+        if not is_within_root(path, export_root):
             self.send_error(HTTPStatus.FORBIDDEN)
             return
         self.serve_file(path, content_type=content_type, allow_range=allow_range)
