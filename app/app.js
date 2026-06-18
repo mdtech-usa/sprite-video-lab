@@ -440,6 +440,7 @@ function bindEvents() {
   els.previewReverseInput.addEventListener("change", () => {
     state.preview.isReversed = els.previewReverseInput.checked;
     state.preview.currentIndex = 0;
+    clearMagicPreview();
     syncAnimationPreview();
     persistSession();
   });
@@ -1058,6 +1059,7 @@ function persistSession() {
       processPreview: state.processPreview,
       selectedIndices: Array.from(state.selected).sort((a, b) => a - b),
       selectionOrder,
+      orderedSelectionMode: state.orderedSelectionMode,
       preview: {
         isPlaying: state.preview.isPlaying,
         currentIndex: state.preview.currentIndex,
@@ -1089,7 +1091,7 @@ function restoreSessionFromStorage() {
     return;
   }
 
-  setOrderedSelectionMode(false);
+  setOrderedSelectionMode(Boolean(snapshot.orderedSelectionMode));
 
   if (!snapshot.upload && !snapshot.job?.frames) {
     if (snapshot?.form) {
@@ -2797,7 +2799,7 @@ function renderPreviewFrameImage(image, frame, selectedCount) {
   els.previewEmptyState.hidden = true;
   els.previewFrameLabel.textContent = `\u5F53\u524D #${String(frame.index + 1).padStart(3, "0")}`;
   updatePreviewControls(selectedCount);
-  syncMagicPreviewFrame(frame, selectedCount);
+  syncMagicPreviewFrame(frame, selectedCount, state.preview.currentIndex);
 }
 
 function magicVariantElements(config) {
@@ -2876,30 +2878,34 @@ function formatMagicOutputSize(magicPreview) {
   return width > 0 && height > 0 ? `${width} \u00d7 ${height}` : "-";
 }
 
-function magicFrameForSourceFrame(sourceFrame, variantKey = "half") {
+function magicFrameForSelectedFrame(sourceFrame, selectedPosition, variantKey = "half") {
   const variant = magicVariantData(variantKey);
   if (!variant?.frames || !sourceFrame) {
     return null;
   }
-  return variant.frames.find((frame) => Number(frame.source_index) === Number(sourceFrame.index)) || null;
+  const magicFrame = variant.frames.find((frame) => Number(frame.index) === Number(selectedPosition)) || null;
+  if (!magicFrame || Number(magicFrame.source_index) !== Number(sourceFrame.index)) {
+    return null;
+  }
+  return magicFrame;
 }
 
 function renderMagicPreviewFrameImage(config, image, magicFrame, selectedCount) {
   const ui = magicVariantElements(config);
   paintFrameOnCanvas(ui.canvas, image);
   ui.empty.hidden = true;
-  ui.frameLabel.textContent = `${config.label} #${String(Number(magicFrame.source_index || 0) + 1).padStart(3, "0")}`;
+  ui.frameLabel.textContent = `${config.label} #${String(Number(magicFrame.index || 0) + 1).padStart(3, "0")}`;
   updateMagicVariantControls(config, selectedCount);
 }
 
-async function syncMagicVariantPreviewFrame(config, sourceFrame, selectedCount) {
+async function syncMagicVariantPreviewFrame(config, sourceFrame, selectedCount, selectedPosition) {
   const ui = magicVariantElements(config);
   const variant = magicVariantData(config.key);
   if (!variant?.frames?.length || !ui.panel || ui.panel.hidden) {
     return;
   }
 
-  const magicFrame = magicFrameForSourceFrame(sourceFrame, config.key);
+  const magicFrame = magicFrameForSelectedFrame(sourceFrame, selectedPosition, config.key);
   if (!magicFrame) {
     drawMagicVariantPlaceholder(config, "\u8FD9\u4E00\u5E27\u9700\u8981\u91CD\u65B0 MAGIC");
     updateMagicVariantControls(config, selectedCount);
@@ -2927,9 +2933,9 @@ async function syncMagicVariantPreviewFrame(config, sourceFrame, selectedCount) 
   }
 }
 
-function syncMagicPreviewFrame(sourceFrame, selectedCount) {
+function syncMagicPreviewFrame(sourceFrame, selectedCount, selectedPosition) {
   MAGIC_VARIANT_CONFIGS.forEach((config) => {
-    void syncMagicVariantPreviewFrame(config, sourceFrame, selectedCount);
+    void syncMagicVariantPreviewFrame(config, sourceFrame, selectedCount, selectedPosition);
   });
 }
 

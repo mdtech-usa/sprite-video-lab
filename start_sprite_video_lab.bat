@@ -4,6 +4,7 @@ cd /d "%~dp0"
 
 if "%SPRITE_VIDEO_LAB_HOST%"=="" set "SPRITE_VIDEO_LAB_HOST=127.0.0.1"
 if "%SPRITE_VIDEO_LAB_PORT%"=="" set "SPRITE_VIDEO_LAB_PORT=8894"
+if "%SPRITE_VIDEO_LAB_WORK_DIR%"=="" if exist "E:\" set "SPRITE_VIDEO_LAB_WORK_DIR=E:\sprite-video-lab-work"
 if "%SPRITE_VIDEO_LAB_AI_MODEL_CACHE%"=="" if exist "E:\" set "SPRITE_VIDEO_LAB_AI_MODEL_CACHE=E:\sprite-video-lab-models\huggingface"
 if "%SPRITE_VIDEO_LAB_CORRIDORKEY_ROOT%"=="" if exist "E:\" set "SPRITE_VIDEO_LAB_CORRIDORKEY_ROOT=E:\sprite-video-lab-models\CorridorKey"
 if "%HF_HOME%"=="" set "HF_HOME=%SPRITE_VIDEO_LAB_AI_MODEL_CACHE%"

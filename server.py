@@ -25,7 +25,17 @@ from PIL import Image, ImageChops, ImageFilter
 
 ROOT_DIR = Path(__file__).resolve().parent
 APP_DIR = ROOT_DIR / "app"
-WORK_DIR = ROOT_DIR / "work"
+WORK_DIR_ENV = "SPRITE_VIDEO_LAB_WORK_DIR"
+DEFAULT_WORK_DIR = ROOT_DIR / "work"
+_raw_work_dir = str(os.environ.get(WORK_DIR_ENV, "")).strip().strip("\"'")
+if _raw_work_dir:
+    WORK_DIR = Path(_raw_work_dir).expanduser()
+    if not WORK_DIR.is_absolute():
+        WORK_DIR = (ROOT_DIR / WORK_DIR).resolve()
+    else:
+        WORK_DIR = WORK_DIR.resolve()
+else:
+    WORK_DIR = DEFAULT_WORK_DIR
 UPLOADS_DIR = WORK_DIR / "uploads"
 JOBS_DIR = WORK_DIR / "jobs"
 EXPORTS_DIR = WORK_DIR / "exports"
@@ -33,6 +43,7 @@ PREVIEWS_DIR = WORK_DIR / "previews"
 LINE_CLEANER_DIR = WORK_DIR / "line-cleaner"
 MAGIC_DIR = WORK_DIR / "magic"
 SETTINGS_PATH = WORK_DIR / "settings.json"
+LEGACY_SETTINGS_PATH = DEFAULT_WORK_DIR / "settings.json"
 MAGIC_PREVIEW_LOCK = threading.Lock()
 
 DEFAULT_HOST = "127.0.0.1"
@@ -148,14 +159,29 @@ _CORRIDORKEY_ENGINE_CACHE: dict[tuple[str, str], object] = {}
 def ensure_runtime_dirs() -> None:
     for directory in (APP_DIR, WORK_DIR, UPLOADS_DIR, JOBS_DIR, EXPORTS_DIR, PREVIEWS_DIR, LINE_CLEANER_DIR, MAGIC_DIR):
         directory.mkdir(parents=True, exist_ok=True)
+    migrate_legacy_settings()
+
+
+def migrate_legacy_settings() -> None:
+    if SETTINGS_PATH.resolve() == LEGACY_SETTINGS_PATH.resolve() or SETTINGS_PATH.exists() or not LEGACY_SETTINGS_PATH.exists():
+        return
+    try:
+        settings = json.loads(LEGACY_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_app_settings() -> dict:
-    try:
-        if SETTINGS_PATH.exists():
-            return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    settings_paths = [SETTINGS_PATH]
+    if SETTINGS_PATH.resolve() != LEGACY_SETTINGS_PATH.resolve():
+        settings_paths.append(LEGACY_SETTINGS_PATH)
+    for path in settings_paths:
+        try:
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
     return {}
 
 
@@ -742,6 +768,7 @@ def runtime_info() -> dict:
     return {
         "python_executable": sys.executable,
         "python_prefix": sys.prefix,
+        "work_dir": str(WORK_DIR),
         "torch": torch_info,
         "ai_model_cache": str(default_ai_model_cache_dir()),
         "corridorkey_root": str(default_corridorkey_root()),
@@ -3011,6 +3038,8 @@ def resolve_realesrgan_binary() -> str | None:
         ROOT_DIR / "tools" / "realesrgan-ncnn-vulkan" / "realesrgan-ncnn-vulkan.exe",
         WORK_DIR / "tools" / "realesrgan-ncnn-vulkan.exe",
         WORK_DIR / "tools" / "realesrgan-ncnn-vulkan" / "realesrgan-ncnn-vulkan.exe",
+        DEFAULT_WORK_DIR / "tools" / "realesrgan-ncnn-vulkan.exe",
+        DEFAULT_WORK_DIR / "tools" / "realesrgan-ncnn-vulkan" / "realesrgan-ncnn-vulkan.exe",
     ):
         if path.exists() and path.is_file():
             return str(path)
@@ -3028,6 +3057,7 @@ def resolve_realesrgan_model_dir(binary: str | None = None) -> Path | None:
         [
             ROOT_DIR / "tools" / "realesrgan-ncnn-vulkan" / "models",
             WORK_DIR / "tools" / "realesrgan-ncnn-vulkan" / "models",
+            DEFAULT_WORK_DIR / "tools" / "realesrgan-ncnn-vulkan" / "models",
         ]
     )
     for path in candidates:
@@ -3043,7 +3073,7 @@ def realesrgan_missing_message() -> str:
         "Real-ESRGAN anime is not ready. Expected "
         "realesrgan-ncnn-vulkan.exe plus models/realesrgan-x4plus-anime.param and .bin. "
         f"Set {REAL_ESRGAN_BINARY_ENV} and optionally {REAL_ESRGAN_MODEL_DIR_ENV}, "
-        "or install the portable package under work/tools/realesrgan-ncnn-vulkan."
+        "or install the portable package under the configured work/tools/realesrgan-ncnn-vulkan."
     )
 
 
