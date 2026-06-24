@@ -22,6 +22,98 @@ from urllib.parse import urlparse
 from PIL import Image, ImageChops, ImageFilter
 
 
+class MultipartFileItem:
+    def __init__(self, filename: str, file, content_type: str = ""):
+        self.filename = filename
+        self.file = file
+        self.type = content_type
+
+
+class MultipartFormParser:
+    def __init__(self, fp, headers, environ):
+        self.fp = fp
+        self.headers = headers
+        self.environ = environ
+        self._items = {}
+        self._parse()
+
+    def _parse(self):
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/"):
+            return
+        
+        match = re.search(r"boundary=(.+)", content_type)
+        if not match:
+            return
+        
+        boundary = match.group(1).strip('"')
+        content_length = int(self.environ.get("CONTENT_LENGTH", "0"))
+        
+        data = self.fp.read(content_length)
+        if not data:
+            return
+        
+        boundary_bytes = b"--" + boundary.encode('utf-8')
+        parts = data.split(boundary_bytes)
+        
+        for part in parts:
+            if not part.strip():
+                continue
+            if part.strip() == b"--":
+                continue
+            
+            headers_end = part.find(b"\r\n\r\n")
+            if headers_end == -1:
+                continue
+            
+            headers_str = part[:headers_end].decode('utf-8', errors='replace')
+            body = part[headers_end + 4:]
+            
+            filename = ""
+            name = ""
+            content_type = ""
+            
+            for line in headers_str.split("\r\n"):
+                line = line.strip()
+                if line.lower().startswith("content-disposition:"):
+                    disp = line[len("content-disposition:"):].strip()
+                    for attr in re.findall(r'(\w+)="([^"]+)"', disp):
+                        if attr[0].lower() == "name":
+                            name = attr[1]
+                        elif attr[0].lower() == "filename":
+                            filename = attr[1]
+                elif line.lower().startswith("content-type:"):
+                    content_type = line[len("content-type:"):].strip()
+            
+            if name:
+                if filename:
+                    import io
+                    file_like = io.BytesIO(body)
+                    item = MultipartFileItem(filename, file_like, content_type)
+                else:
+                    item = body.decode('utf-8', errors='replace')
+                
+                if name in self._items:
+                    if isinstance(self._items[name], list):
+                        self._items[name].append(item)
+                    else:
+                        self._items[name] = [self._items[name], item]
+                else:
+                    self._items[name] = item
+
+    def __contains__(self, key):
+        return key in self._items
+
+    def __getitem__(self, key):
+        return self._items.get(key)
+
+    def getfirst(self, key, default=None):
+        value = self._items.get(key)
+        if isinstance(value, list):
+            return value[0] if value else default
+        return value if value is not None else default
+
+
 ROOT_DIR = Path(__file__).resolve().parent
 APP_DIR = ROOT_DIR / "app"
 WORK_DIR_ENV = "SPRITE_VIDEO_LAB_WORK_DIR"
@@ -3036,7 +3128,7 @@ def natural_sort_key(value: str) -> list[object]:
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", value)]
 
 
-def field_storage_items(form: cgi.FieldStorage, key: str) -> list:
+def field_storage_items(form, key: str) -> list:
     if key not in form:
         return []
     value = form[key]
@@ -4186,7 +4278,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "upload": result})
                 return
             if parsed.path == "/api/upload":
-                form = cgi.FieldStorage(
+                form = MultipartFormParser(
                     fp=self.rfile,
                     headers=self.headers,
                     environ={
@@ -4202,7 +4294,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "upload": result})
                 return
             if parsed.path == "/api/import-animation":
-                form = cgi.FieldStorage(
+                form = MultipartFormParser(
                     fp=self.rfile,
                     headers=self.headers,
                     environ={
@@ -4215,7 +4307,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "job": result})
                 return
             if parsed.path == "/api/line-cleaner-process":
-                form = cgi.FieldStorage(
+                form = MultipartFormParser(
                     fp=self.rfile,
                     headers=self.headers,
                     environ={
