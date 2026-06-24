@@ -19,6 +19,10 @@ if not "%SPRITE_VIDEO_LAB_PYTHON%"=="" if exist "%SPRITE_VIDEO_LAB_PYTHON%" (
   set "PYTHON_EXE=%SPRITE_VIDEO_LAB_PYTHON%"
   goto :python_ready
 )
+if exist "%~dp0.venv\Scripts\python.exe" (
+  set "PYTHON_EXE=%~dp0.venv\Scripts\python.exe"
+  goto :python_ready
+)
 if exist "E:\sprite-video-lab-models\venv\Scripts\python.exe" (
   set "PYTHON_EXE=E:\sprite-video-lab-models\venv\Scripts\python.exe"
   goto :python_ready
