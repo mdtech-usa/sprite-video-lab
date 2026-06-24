@@ -243,8 +243,11 @@ MAGIC_RESIZE_MODES = {
 }
 
 _FFMPEG_HWACCELS_CACHE: set[str] | None = None
+_FFMPEG_HWACCELS_LOCK = threading.Lock()
 _BIREFNET_MODEL_CACHE: dict[tuple[str, str], object] = {}
+_BIREFNET_MODEL_LOCK = threading.Lock()
 _CORRIDORKEY_ENGINE_CACHE: dict[tuple[str, str], object] = {}
+_CORRIDORKEY_ENGINE_LOCK = threading.Lock()
 
 
 def ensure_runtime_dirs() -> None:
@@ -696,22 +699,26 @@ def available_ffmpeg_hwaccels() -> set[str]:
     if _FFMPEG_HWACCELS_CACHE is not None:
         return _FFMPEG_HWACCELS_CACHE
 
-    ffmpeg = resolve_ffmpeg_binary("ffmpeg")
-    try:
-        output = run_process([ffmpeg, "-hide_banner", "-hwaccels"])
-    except Exception:
-        _FFMPEG_HWACCELS_CACHE = set()
-        return _FFMPEG_HWACCELS_CACHE
+    with _FFMPEG_HWACCELS_LOCK:
+        if _FFMPEG_HWACCELS_CACHE is not None:
+            return _FFMPEG_HWACCELS_CACHE
 
-    available: set[str] = set()
-    for line in output.splitlines():
-        value = line.strip().lower()
-        if not value or value.endswith(":"):
-            continue
-        if re.fullmatch(r"[a-z0-9_]+", value):
-            available.add(value)
-    _FFMPEG_HWACCELS_CACHE = available
-    return _FFMPEG_HWACCELS_CACHE
+        ffmpeg = resolve_ffmpeg_binary("ffmpeg")
+        try:
+            output = run_process([ffmpeg, "-hide_banner", "-hwaccels"])
+        except Exception:
+            _FFMPEG_HWACCELS_CACHE = set()
+            return _FFMPEG_HWACCELS_CACHE
+
+        available: set[str] = set()
+        for line in output.splitlines():
+            value = line.strip().lower()
+            if not value or value.endswith(":"):
+                continue
+            if re.fullmatch(r"[a-z0-9_]+", value):
+                available.add(value)
+        _FFMPEG_HWACCELS_CACHE = available
+        return _FFMPEG_HWACCELS_CACHE
 
 
 def preferred_ffmpeg_hwaccel() -> tuple[str, str | None]:
@@ -1538,18 +1545,22 @@ def load_birefnet_model(model_key: str, requested_device: str):
     if cache_key in _BIREFNET_MODEL_CACHE:
         return _BIREFNET_MODEL_CACHE[cache_key], device, normalized_model_key, repo_id
 
-    if hasattr(torch_module, "set_float32_matmul_precision"):
-        try:
-            torch_module.set_float32_matmul_precision("high")
-        except Exception:
-            pass
+    with _BIREFNET_MODEL_LOCK:
+        if cache_key in _BIREFNET_MODEL_CACHE:
+            return _BIREFNET_MODEL_CACHE[cache_key], device, normalized_model_key, repo_id
 
-    cache_dir = configure_ai_model_cache()
-    model = auto_model.from_pretrained(repo_id, trust_remote_code=True, cache_dir=str(cache_dir))
-    model.to(device)
-    model.eval()
-    _BIREFNET_MODEL_CACHE[cache_key] = model
-    return model, device, normalized_model_key, repo_id
+        if hasattr(torch_module, "set_float32_matmul_precision"):
+            try:
+                torch_module.set_float32_matmul_precision("high")
+            except Exception:
+                pass
+
+        cache_dir = configure_ai_model_cache()
+        model = auto_model.from_pretrained(repo_id, trust_remote_code=True, cache_dir=str(cache_dir))
+        model.to(device)
+        model.eval()
+        _BIREFNET_MODEL_CACHE[cache_key] = model
+        return model, device, normalized_model_key, repo_id
 
 
 def import_corridorkey_dependencies():
@@ -1640,14 +1651,18 @@ def load_corridorkey_engine(requested_device: str, screen_color: str):
     if cache_key in _CORRIDORKEY_ENGINE_CACHE:
         return _CORRIDORKEY_ENGINE_CACHE[cache_key], device, root
 
-    engine = corridor_backend.create_engine(
-        backend="torch",
-        device=device,
-        img_size=CORRIDORKEY_IMG_SIZE,
-        screen_color=screen_color,
-    )
-    _CORRIDORKEY_ENGINE_CACHE[cache_key] = engine
-    return engine, device, root
+    with _CORRIDORKEY_ENGINE_LOCK:
+        if cache_key in _CORRIDORKEY_ENGINE_CACHE:
+            return _CORRIDORKEY_ENGINE_CACHE[cache_key], device, root
+
+        engine = corridor_backend.create_engine(
+            backend="torch",
+            device=device,
+            img_size=CORRIDORKEY_IMG_SIZE,
+            screen_color=screen_color,
+        )
+        _CORRIDORKEY_ENGINE_CACHE[cache_key] = engine
+        return engine, device, root
 
 
 def linear_to_srgb_array(values):
