@@ -3229,6 +3229,9 @@ function updateChromaVisibility() {
   els.matteModeInput.disabled = !els.chromaEnabledInput.checked;
   els.keyModeInput.closest(".field").style.display = usesKeyColorControls ? "" : "none";
   els.manualColorField.style.display = usesKeyColorControls && isManual ? "" : "none";
+  if (!isChroma && !isCorridor) {
+    els.despillInput.value = "0";
+  }
   document.querySelectorAll(".chroma-only").forEach((node) => {
     node.style.display = isChroma ? "" : "none";
   });

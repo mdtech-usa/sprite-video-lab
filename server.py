@@ -248,6 +248,7 @@ _BIREFNET_MODEL_CACHE: dict[tuple[str, str], object] = {}
 _BIREFNET_MODEL_LOCK = threading.Lock()
 _CORRIDORKEY_ENGINE_CACHE: dict[tuple[str, str], object] = {}
 _CORRIDORKEY_ENGINE_LOCK = threading.Lock()
+_SETTINGS_LOCK = threading.Lock()
 
 
 def ensure_runtime_dirs() -> None:
@@ -267,21 +268,23 @@ def migrate_legacy_settings() -> None:
 
 
 def load_app_settings() -> dict:
-    settings_paths = [SETTINGS_PATH]
-    if SETTINGS_PATH.resolve() != LEGACY_SETTINGS_PATH.resolve():
-        settings_paths.append(LEGACY_SETTINGS_PATH)
-    for path in settings_paths:
-        try:
-            if path.exists():
-                return json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
+    with _SETTINGS_LOCK:
+        settings_paths = [SETTINGS_PATH]
+        if SETTINGS_PATH.resolve() != LEGACY_SETTINGS_PATH.resolve():
+            settings_paths.append(LEGACY_SETTINGS_PATH)
+        for path in settings_paths:
+            try:
+                if path.exists():
+                    return json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
     return {}
 
 
 def save_app_settings(settings: dict) -> None:
-    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    with _SETTINGS_LOCK:
+        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def configured_exports_dir() -> Path:
@@ -2148,7 +2151,6 @@ def apply_matte_pipeline(
                 filter_size = (matte_info["halo_pixels"] * 2) + 1
                 alpha = alpha.filter(ImageFilter.MinFilter(filter_size))
             keyed_frame = apply_alpha_mask(raw_image, alpha)
-            keyed_frame = despill_alpha_edges(keyed_frame, key_rgb, matte_info["despill_strength"])
             keyed_frames.append(keyed_frame)
         return keyed_frames, key_rgb, matte_info
 
@@ -2197,7 +2199,6 @@ def apply_matte_pipeline(
                 keyed_frame.putalpha(refined_alpha)
         else:
             keyed_frame = apply_alpha_mask(raw_image, alpha)
-            keyed_frame = despill_alpha_edges(keyed_frame, key_rgb, matte_info["despill_strength"])
         keyed_frames.append(keyed_frame)
 
     if ai_info:
